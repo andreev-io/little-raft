@@ -1,8 +1,9 @@
-use crossbeam::channel;
-use crossbeam_channel::{unbounded, RecvTimeoutError, Select};
+use crossbeam::{channel, select};
+use crossbeam_channel::{unbounded, RecvTimeoutError, Select, SelectTimeoutError};
 use rand::{thread_rng, Rng};
 use std::{collections::BTreeSet, thread, time::Duration};
 
+#[derive(Clone, Copy, PartialEq)]
 enum State {
     Follower,
     Candidate,
@@ -36,11 +37,13 @@ pub enum Message {
         term: usize,
         vote_granted: bool,
     },
+    ControlUp,
+    ControlDown,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Peer {
-    id: usize,
+    pub id: usize,
     tx: channel::Sender<Message>,
 }
 
@@ -67,10 +70,14 @@ pub struct ConsensusModule {
     current_term: usize,
     // ID of peers with votes for self.
     current_votes: Option<Box<BTreeSet<usize>>>,
-    // Receiving end of a multiple producer single consumer channel.
+    // Receiving end of a multiple producer single consumer channel for the Raft protocol.
     rx: channel::Receiver<Message>,
+    // Receiving end of a channel for forced state change messages.
+    rx_control: channel::Receiver<Message>,
     // State of this replica.
     state: State,
+    // State before dying.
+    prev_state: State,
     // Vector of peers, i.e. their IDs and the corresponding transmission ends
     // of mpsc channels.
     peers: Vec<Peer>,
@@ -93,7 +100,12 @@ pub struct ConsensusModule {
 
 impl ConsensusModule {
     // This function starts the replica and blocks forever.
-    pub fn start(id: usize, rx: channel::Receiver<Message>, mut peers: Vec<Peer>) {
+    pub fn start(
+        id: usize,
+        rx: channel::Receiver<Message>,
+        rx_control: channel::Receiver<Message>,
+        mut peers: Vec<Peer>,
+    ) {
         peers.sort_by_key(|k| k.id);
 
         let mut module = ConsensusModule {
@@ -102,7 +114,9 @@ impl ConsensusModule {
             current_term: 0,
             current_votes: None,
             rx: rx,
+            rx_control: rx_control,
             state: State::Follower,
+            prev_state: State::Dead,
             peers: peers,
             voted_for: None,
             log: Vec::new(),
@@ -120,9 +134,24 @@ impl ConsensusModule {
         loop {
             match self.state {
                 State::Leader => {
-                    match self.rx.recv_timeout(Duration::from_millis(50)) {
-                        Ok(msg) => self.process_message_as_leader(msg),
-                        Err(RecvTimeoutError::Timeout) => {
+                    let mut select = Select::new();
+                    let oper1 = select.recv(&self.rx);
+                    let oper2 = select.recv(&self.rx_control);
+
+                    let mut message: Option<Message> = None;
+                    match select.select_timeout(Duration::from_millis(50)) {
+                        Ok(oper) => match oper.index() {
+                            i if i == oper1 => match oper.recv(&self.rx) {
+                                Ok(msg) => message = Some(msg),
+                                Err(_) => panic!("unexpected error"),
+                            },
+                            i if i == oper2 => match oper.recv(&self.rx_control) {
+                                Ok(msg) => message = Some(msg),
+                                Err(_) => panic!("unexpected error"),
+                            },
+                            _ => panic!("unexpected error"),
+                        },
+                        Err(SelectTimeoutError) => {
                             for peer in &self.peers {
                                 peer.tx
                                     .send(Message::AppendEntryRequest {
@@ -146,33 +175,64 @@ impl ConsensusModule {
                         }
                         Err(_) => panic!("unexpected error"),
                     };
-                }
-                State::Dead => {}
-                State::Candidate | State::Follower => {
-                    match self
-                        .rx
-                        .recv_timeout(Duration::from_millis(rng.gen_range(150..=350)))
-                    {
-                        Ok(msg) => match &self.state {
+
+
+                    if let Some(msg) = message {
+                        self.process_message_as_leader(msg);
+                    }
+                },
+                State::Dead | State::Candidate | State::Follower => {
+                    let mut select = Select::new();
+                    let oper1 = select.recv(&self.rx);
+                    let oper2 = select.recv(&self.rx_control);
+
+                    let mut message: Option<Message> = None;
+                    match select.select_timeout(Duration::from_millis(rng.gen_range(150..=350))) {
+                        Ok(oper) => match oper.index() {
+                            i if i == oper1 => match oper.recv(&self.rx) {
+                                Ok(msg) => message = Some(msg),
+                                Err(_) => panic!("unexpected error"),
+                            },
+                            i if i == oper2 => match oper.recv(&self.rx_control) {
+                                Ok(msg) => message = Some(msg),
+                                Err(_) => panic!("unexpected error"),
+                            },
+                            _ => panic!("unexpected error"),
+                        },
+                        Err(_) => {},
+                    }
+
+                    if let Some(msg) = message {
+                        match &self.state {
                             State::Candidate => self.process_message_as_candidate(msg),
                             State::Follower => self.process_message_as_follower(msg),
-                            State::Leader => {}
-                            State::Dead => {}
-                        },
-                        Err(_) => self.become_candidate(),
+                            State::Dead => self.process_message_as_dead(msg),
+                            _ => {}
+                        }
+                    } else if self.state != State::Dead {
+                        self.become_candidate();
                     }
                 }
             }
         }
     }
 
+    fn process_message_as_dead(&mut self, message: Message) {
+        match message {
+            Message::ControlUp => self.become_alive(),
+            _ => {},
+        }
+    }
+
     fn process_message_as_leader(&mut self, message: Message) {
         match message {
+            Message::ControlDown => self.become_dead(),
+            Message::ControlUp => self.become_alive(),
             _ => {}
         }
     }
 
-    fn process_message_as_follower(&mut self, mut message: Message) {
+    fn process_message_as_follower(&mut self, message: Message) {
         match message {
             Message::RequestVoteRequest {
                 from_id,
@@ -199,6 +259,7 @@ impl ConsensusModule {
                         || (self.log[self.log.len() - 1].index <= last_log_index
                             && self.log[self.log.len() - 1].term <= last_log_term)
                     {
+                        println!("peer {} casted a vote for {}", self.id, from_id);
                         peer.tx
                             .send(Message::RequestVoteResponse {
                                 from_id: self.id,
@@ -287,6 +348,8 @@ impl ConsensusModule {
             }
             Message::AppendEntryResponse { .. } => { /* ignore */ }
             Message::RequestVoteResponse { .. } => { /* ignore */ }
+            Message::ControlDown => self.become_dead(),
+            Message::ControlUp => self.become_alive(),
         }
     }
 
@@ -346,10 +409,25 @@ impl ConsensusModule {
                 }
             }
             Message::AppendEntryResponse { .. } => { /* ignore */ }
+            Message::ControlDown => self.become_dead(),
+            Message::ControlUp => self.become_alive(),
         }
     }
 
+    fn become_alive(&mut self) {
+        println!("peer {} becoming alive", self.id);
+        self.state = self.prev_state;
+        self.prev_state = State::Dead;
+    }
+
+    fn become_dead(&mut self) {
+        println!("peer {} becoming dead", self.id);
+        self.prev_state = self.state;
+        self.state = State::Dead;
+    }
+
     fn become_leader(&mut self) {
+        println!("peer {} is now leader", self.id);
         self.state = State::Leader;
         self.current_votes = None;
         self.voted_for = None;
@@ -358,6 +436,7 @@ impl ConsensusModule {
     }
 
     fn become_follower(&mut self, term: usize) {
+        println!("peer {} is now follower", self.id);
         self.current_term = term;
         self.state = State::Follower;
         self.current_votes = None;
@@ -367,6 +446,7 @@ impl ConsensusModule {
     }
 
     fn become_candidate(&mut self) {
+        println!("peer {} is now candidate", self.id);
         self.next_index = None;
         self.match_index = None;
         // Increase current term.
