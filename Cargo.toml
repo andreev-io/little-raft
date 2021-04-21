@@ -9,3 +9,5 @@ resolver = "2"
 
 [dependencies]
 rand = "0.8.3"
+crossbeam-channel = "0.5.1"
+crossbeam = "0.8.0"

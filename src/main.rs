@@ -1,7 +1,9 @@
 mod consensus_module;
 
 use consensus_module::{ConsensusModule, Peer};
-use std::{sync::mpsc::channel, thread};
+use crossbeam::channel;
+use crossbeam_channel::{unbounded, Select};
+use std::thread;
 
 const REPLICAS: usize = 5;
 
@@ -9,7 +11,7 @@ fn main() {
     let mut peer_protos = Vec::new();
     let mut receivers = Vec::new();
     for id in 0..=REPLICAS {
-        let (tx, rx) = channel();
+        let (tx, rx) = unbounded();
 
         peer_protos.push(Peer::new(id, tx));
         receivers.push((id, rx));
