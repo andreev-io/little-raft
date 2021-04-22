@@ -1,74 +1,86 @@
-mod consensus_module;
+mod replicas;
+mod types;
 
-use consensus_module::{ConsensusModule, Message, Peer};
-use crossbeam::channel;
-use crossbeam_channel::{unbounded, Select};
-use std::{fs::File, io, io::prelude::*, thread, time::Duration};
+use crossbeam::channel::{Receiver, Sender};
+use crossbeam_channel::unbounded;
+use replicas::Replica;
+use std::{fs::File, io::prelude::*, thread, time::Duration};
+use types::{ControlMessage, Message, Peer};
 
 const REPLICAS: usize = 5;
 
+type PeerSenderProto = (usize, Sender<Message>, Sender<ControlMessage>);
+type PeerReceiverProto = (usize, Receiver<Message>, Receiver<ControlMessage>);
+
 fn main() {
-    let mut peer_protos = Vec::new();
-    let mut receivers = Vec::new();
-    let mut txs = Vec::new();
+    let (mut receivers, mut transmitters) = (Vec::new(), Vec::new());
     for id in 1..=REPLICAS {
         let (tx, rx) = unbounded();
         let (tx_control, rx_control) = unbounded();
-        peer_protos.push(Peer::new(id, tx));
+        transmitters.push((id, tx, tx_control));
         receivers.push((id, rx, rx_control));
-        txs.push((id, tx_control));
     }
 
+    start_replica_threads(receivers, &transmitters);
+    process_control_messages(transmitters);
+}
+
+fn start_replica_threads(
+    mut receivers: Vec<PeerReceiverProto>,
+    transmitters: &Vec<PeerSenderProto>,
+) {
     while let Some((id, rx, rx_control)) = receivers.pop() {
-        let mut peers = peer_protos.clone();
-        peers.retain(|peer| peer.id != id);
+        let peers = transmitters
+            .clone()
+            .iter()
+            .map(|tuple| Peer::new(tuple.0, tuple.1.clone()))
+            .filter(|peer| peer.id != id)
+            .collect();
 
         thread::spawn(move || {
-            ConsensusModule::start(id, rx, rx_control, peers);
+            Replica::start(id, rx, rx_control, peers);
         });
     }
+}
 
+fn parse_control_line(s: &str) -> (usize, String) {
+    let entry: Vec<&str> = s.split(":").collect();
+    let idx = entry[0].parse::<usize>().expect("non-digit index");
+    let mut command = entry[1].to_string();
+    command.retain(|c| c != '/' && c != ' ');
+    return (idx, command);
+}
+
+fn process_control_messages(transmitters: Vec<PeerSenderProto>) {
     let mut next_unprocessed_line: usize = 0;
-    let mut buffer = String::new();
     loop {
-        buffer = String::new();
+        let mut buffer = String::new();
         File::open("input.txt")
             .unwrap()
             .read_to_string(&mut buffer)
             .unwrap();
 
         let lines: Vec<&str> = buffer.split("\n").collect();
-        if lines.len() >= next_unprocessed_line + 1 && lines[lines.len() - 1].contains("//") {
-            let last_line = lines[next_unprocessed_line];
+        if lines.len() >= next_unprocessed_line + 1 && lines[next_unprocessed_line].contains("//") {
+            let (id, command) = parse_control_line(lines[next_unprocessed_line]);
             next_unprocessed_line += 1;
-            println!(
-                "Processed line {}: \"{}\"",
-                next_unprocessed_line, last_line
-            );
 
-            let entry: Vec<&str> = last_line.split(":").collect();
-            let idx = entry[0].parse::<usize>().expect("non-digit index");
-            let mut command = entry[1].to_string();
-            command.retain(|c| c != '/' && c != ' ');
+            let message = match command.as_str() {
+                "Up" => Some(ControlMessage::Up),
+                "Down" => Some(ControlMessage::Down),
+                _ => None,
+            };
 
-            match command.as_str() {
-                "Up" => {
-                    let tx = &txs[txs
-                        .binary_search_by_key(&idx, |entry| entry.0)
-                        .expect("could not find peer by index from input file")]
-                    .1;
-                    tx.send(Message::ControlUp)
-                        .expect("failed to send a control message");
-                }
-                "Down" => {
-                    let tx = &txs[txs
-                        .binary_search_by_key(&idx, |entry| entry.0)
-                        .expect("could not find peer by index from input file")]
-                    .1;
-                    tx.send(Message::ControlDown)
-                        .expect("failed to send a control message");
-                }
-                _ => {}
+            if let Some(message) = message {
+                transmitters[transmitters
+                    .binary_search_by_key(&id, |tuple| tuple.0)
+                    .unwrap()]
+                .2
+                .send(message)
+                .unwrap();
+                println!("Processed line {}", next_unprocessed_line);
+            } else {
+                println!("Unknown control message. Valid formats: \"5: Down //\" or \"1: Up //\"");
             }
         }
 
