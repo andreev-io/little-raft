@@ -62,12 +62,26 @@ fn process_control_messages(transmitters: Vec<PeerSenderProto>) {
 
         let lines: Vec<&str> = buffer.split("\n").collect();
         if lines.len() >= next_unprocessed_line + 1 && lines[next_unprocessed_line].contains("//") {
-            let (id, command) = parse_control_line(lines[next_unprocessed_line]);
+            let (id, mut command) = parse_control_line(lines[next_unprocessed_line]);
             next_unprocessed_line += 1;
+
+            let delta = if command.contains("Apply") {
+                let delta = command
+                    .split("Apply")
+                    .nth(1)
+                    .unwrap()
+                    .parse::<i32>()
+                    .expect("unparseable delta");
+                command = String::from("Apply");
+                delta
+            } else {
+                0
+            };
 
             let message = match command.as_str() {
                 "Up" => Some(ControlMessage::Up),
                 "Down" => Some(ControlMessage::Down),
+                "Apply" => Some(ControlMessage::Apply(delta)),
                 _ => None,
             };
 
@@ -80,7 +94,7 @@ fn process_control_messages(transmitters: Vec<PeerSenderProto>) {
                 .unwrap();
                 println!("Processed line {}", next_unprocessed_line);
             } else {
-                println!("Unknown control message. Valid formats: \"5: Down //\" or \"1: Up //\"");
+                println!("Unknown control message. Valid formats: \"5: Down //\" or \"1: Up //\" or \"2: Apply -11//\"");
             }
         }
 

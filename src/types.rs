@@ -1,5 +1,5 @@
-use crossbeam::channel::{bounded, Sender, Receiver};
-use std::{time::Duration, thread};
+use crossbeam::channel::{bounded, Receiver, Sender};
+use std::{thread, time::Duration};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum State {
@@ -12,6 +12,7 @@ pub enum State {
 pub enum ControlMessage {
     Up,
     Down,
+    Apply(i32),
 }
 
 #[derive(Clone, Debug)]
@@ -28,6 +29,7 @@ pub enum Message {
         from_id: usize,
         term: usize,
         success: bool,
+        last_index: usize,
     },
     RequestVoteRequest {
         from_id: usize,

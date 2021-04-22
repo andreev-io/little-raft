@@ -1,8 +1,15 @@
-use crate::types::{ControlMessage, Log, Message, Peer, State, LeaderTimer};
+use crate::types::{ControlMessage, LeaderTimer, Log, Message, Peer, State};
 use crossbeam::channel::Receiver;
 use crossbeam_channel::Select;
 use rand::Rng;
-use std::{collections::BTreeSet, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
+
+const LEADER_TIMEOUT: u64 = 50;
+const NOT_LEADER_MIN_TIMEOUT: u64 = 200;
+const NOT_LEADER_MAX_TIMEOUT: u64 = 350;
 
 pub struct Replica {
     // This is simply the value the consistency of which the consensus
@@ -37,10 +44,10 @@ pub struct Replica {
     last_applied: usize,
     // For each server, index of the next log entry to send to that server. Only
     // present on leaders.
-    next_index: Option<Vec<usize>>,
+    next_index: BTreeMap<usize, usize>,
     // For each server, index of highest log entry known to be replicated on
     // that server. Only present on leaders.
-    match_index: Option<Vec<usize>>,
+    match_index: BTreeMap<usize, usize>,
     // Timer to times heartbeat messages on the leader.
     leader_timer: LeaderTimer,
 }
@@ -53,7 +60,7 @@ impl Replica {
         rx_control: Receiver<ControlMessage>,
         peers: Vec<Peer>,
     ) {
-        let mut module = Replica {
+        let mut replica = Replica {
             value: 0,
             id: id,
             current_term: 0,
@@ -74,32 +81,24 @@ impl Replica {
             ],
             commit_index: 0,
             last_applied: 0,
-            next_index: None,
-            match_index: None,
-            leader_timer: LeaderTimer::new(Duration::from_millis(500)),
+            next_index: BTreeMap::new(),
+            match_index: BTreeMap::new(),
+            leader_timer: LeaderTimer::new(Duration::from_millis(LEADER_TIMEOUT)),
         };
 
-        module.poll();
+        replica.poll();
     }
 
     fn send_message(&self, peer_id: usize, message: Message) {
         self.get_peer_by_id(peer_id).send(message);
     }
 
-    fn broadcast_message(&self, message: Message) {
+    fn broadcast_message<F>(&self, message_generator: F)
+    where
+        F: Fn(&Peer) -> Message,
+    {
         for peer in &self.peers {
-            peer.send(message.clone());
-        }
-    }
-
-    fn new_append_entry_message(&self) -> Message {
-        Message::AppendEntryRequest {
-            term: self.current_term,
-            from_id: self.id,
-            prev_log_index: self.log.len() - 1,
-            prev_log_term: self.log[self.log.len() - 1].term,
-            entries: Vec::new(),
-            commit_index: self.commit_index,
+            peer.send(message_generator(peer));
         }
     }
 
@@ -125,17 +124,34 @@ impl Replica {
         }
     }
 
+    fn get_entries_for_peer(&self, peer_id: usize) -> Vec<Log> {
+        if self.state != State::Leader {
+            Vec::new()
+        } else if self.log.len() - 1 >= self.next_index[&peer_id] {
+            (&self.log[self.next_index[&peer_id]..self.log.len()]).to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
     fn poll(&mut self) {
         let mut rng = rand::thread_rng();
         loop {
             match self.state {
                 State::Leader => {
                     if self.leader_timer.fired() {
-                        self.broadcast_message(self.new_append_entry_message());
+                        self.broadcast_message(|p: &Peer| Message::AppendEntryRequest {
+                            term: self.current_term,
+                            from_id: self.id,
+                            prev_log_index: self.log.len() - 1,
+                            prev_log_term: self.log[self.log.len() - 1].term,
+                            entries: self.get_entries_for_peer(p.id),
+                            commit_index: self.commit_index,
+                        });
                         self.leader_timer.renew();
                     }
 
-                    let timeout = Duration::from_millis(50);
+                    let timeout = Duration::from_millis(LEADER_TIMEOUT);
                     let messages = self.read_message_with_timeout(timeout);
                     match messages {
                         (Some(msg), None) => self.process_message_as_leader(msg),
@@ -145,7 +161,9 @@ impl Replica {
                     };
                 }
                 State::Follower => {
-                    let timeout = Duration::from_millis(rng.gen_range(1000..=1500));
+                    let timeout = Duration::from_millis(
+                        rng.gen_range(NOT_LEADER_MIN_TIMEOUT..=NOT_LEADER_MAX_TIMEOUT),
+                    );
                     let messages = self.read_message_with_timeout(timeout);
                     match messages {
                         (None, None) => self.become_candidate(),
@@ -155,7 +173,9 @@ impl Replica {
                     };
                 }
                 State::Candidate => {
-                    let timeout = Duration::from_millis(rng.gen_range(1000..=1500));
+                    let timeout = Duration::from_millis(
+                        rng.gen_range(NOT_LEADER_MIN_TIMEOUT..=NOT_LEADER_MAX_TIMEOUT),
+                    );
                     let messages = self.read_message_with_timeout(timeout);
                     match messages {
                         (None, None) => self.become_candidate(),
@@ -169,6 +189,42 @@ impl Replica {
                     self.process_control_message(message);
                 }
             }
+
+            self.apply_ready_changes();
+        }
+    }
+
+    fn append(&mut self, delta: i32) {
+        self.log.push(Log {
+            index: self.log.len(),
+            delta: delta,
+            term: self.current_term,
+        });
+    }
+
+    fn apply_ready_changes(&mut self) {
+        // Move the commit index to the lates log index that has been replicated
+        // on the majority of the replicas.
+        if self.state == State::Leader && self.commit_index < self.log.len() - 1 {
+            let mut n = self.log.len() - 1;
+            while n > self.commit_index {
+                let num_replications =
+                    self.next_index.iter().fold(
+                        0,
+                        |acc, nxt_idx| if nxt_idx.1 >= &n { acc + 1 } else { acc },
+                    );
+                if num_replications * 2 >= self.peers.len() && self.log[n].term == self.current_term
+                {
+                    self.commit_index = n;
+                }
+                n -= 1;
+            }
+        }
+
+        // Apply changes that are behind the currently committed index.
+        while self.commit_index > self.last_applied {
+            self.last_applied += 1;
+            self.value += self.log[self.last_applied].delta;
         }
     }
 
@@ -176,6 +232,10 @@ impl Replica {
         match message {
             ControlMessage::Up => self.become_alive(),
             ControlMessage::Down => self.become_dead(),
+            ControlMessage::Apply(delta) => match self.state {
+                State::Leader => self.append(delta),
+                _ => {}
+            },
         }
     }
 
@@ -185,9 +245,16 @@ impl Replica {
                 from_id,
                 success,
                 term,
+                last_index,
             } => {
                 if term > self.current_term {
                     self.become_follower(term);
+                } else if success {
+                    self.next_index.insert(from_id, last_index + 1);
+                    self.match_index.insert(from_id, last_index);
+                } else {
+                    self.next_index
+                        .insert(from_id, self.next_index[&from_id] - 1);
                 }
             }
             _ => {}
@@ -266,6 +333,7 @@ impl Replica {
                             from_id: self.id,
                             term: self.current_term,
                             success: false,
+                            last_index: 0, // TODO: fix
                         },
                     )
                 // If our log doesn't contain an entry at prev_log_index with
@@ -279,6 +347,7 @@ impl Replica {
                             from_id: self.id,
                             term: self.current_term,
                             success: false,
+                            last_index: 0, // TODO: fix
                         },
                     );
                 } else {
@@ -288,6 +357,7 @@ impl Replica {
                             from_id: self.id,
                             term: self.current_term,
                             success: true,
+                            last_index: 0, //TODO: fix
                         },
                     );
                 }
@@ -338,6 +408,7 @@ impl Replica {
                             from_id: self.id,
                             term: self.current_term,
                             success: false,
+                            last_index: 0, // TODO: fix
                         },
                     )
                 }
@@ -401,9 +472,12 @@ impl Replica {
         self.state = State::Leader;
         self.current_votes = None;
         self.voted_for = None;
-        self.next_index = Some(vec![self.log.len(); self.peers.len()]);
-        self.match_index = Some(vec![0; self.peers.len()]);
-        self.broadcast_message(self.new_append_entry_message())
+        self.next_index = BTreeMap::new();
+        self.match_index = BTreeMap::new();
+        for peer in &self.peers {
+            self.next_index.insert(peer.id, self.log.len());
+            self.match_index.insert(peer.id, 0);
+        }
     }
 
     fn become_follower(&mut self, term: usize) {
@@ -412,20 +486,12 @@ impl Replica {
         self.state = State::Follower;
         self.current_votes = None;
         self.voted_for = None;
-        self.next_index = None;
-        self.match_index = None;
     }
 
     fn become_candidate(&mut self) {
-        println!(
-            "peer {} is now candidate with term {}",
-            self.id,
-            self.current_term + 1
-        );
-        self.next_index = None;
-        self.match_index = None;
         // Increase current term.
         self.current_term += 1;
+        println!("peer {} is candidate term {}", self.id, self.current_term);
         // Claim yourself a candidate.
         self.state = State::Candidate;
         // Initialize votes. Vote for yourself.
@@ -434,15 +500,13 @@ impl Replica {
         self.current_votes = Some(Box::new(votes));
         self.voted_for = Some(self.id);
         // Fan out vote requests.
-        self.broadcast_message(self.new_request_vote_message());
-    }
-
-    fn new_request_vote_message(&self) -> Message {
-        Message::RequestVoteRequest {
-            from_id: self.id,
-            term: self.current_term,
-            last_log_index: 0, /* TODO: fix */
-            last_log_term: 0,  /* TODO: fix */
-        }
+        self.broadcast_message(|_: &Peer| {
+            Message::RequestVoteRequest {
+                from_id: self.id,
+                term: self.current_term,
+                last_log_index: 0, /* TODO: fix */
+                last_log_term: 0,  /* TODO: fix */
+            }
+        });
     }
 }
