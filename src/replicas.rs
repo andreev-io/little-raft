@@ -7,9 +7,9 @@ use std::{
     time::Duration,
 };
 
-const LEADER_TIMEOUT: u64 = 50;
-const NOT_LEADER_MIN_TIMEOUT: u64 = 200;
-const NOT_LEADER_MAX_TIMEOUT: u64 = 350;
+const LEADER_TIMEOUT: u64 = 500;
+const NOT_LEADER_MIN_TIMEOUT: u64 = 2000;
+const NOT_LEADER_MAX_TIMEOUT: u64 = 3500;
 
 pub struct Replica {
     // This is simply the value the consistency of which the consensus
@@ -73,9 +73,9 @@ impl Replica {
             voted_for: None,
             log: vec![
                 Log {
-                    index: 0,
                     delta: 0,
-                    term: 0
+                    term: 0,
+                    index: 0
                 };
                 1
             ],
@@ -125,13 +125,11 @@ impl Replica {
     }
 
     fn get_entries_for_peer(&self, peer_id: usize) -> Vec<Log> {
-        if self.state != State::Leader {
-            Vec::new()
-        } else if self.log.len() - 1 >= self.next_index[&peer_id] {
-            (&self.log[self.next_index[&peer_id]..self.log.len()]).to_vec()
-        } else {
-            Vec::new()
-        }
+        // println!(
+        // "my logs {:?}, next index for peer {}",
+        // self.log, self.next_index[&peer_id]
+        // );
+        (&self.log[self.next_index[&peer_id]..self.log.len()]).to_vec()
     }
 
     fn poll(&mut self) {
@@ -140,11 +138,19 @@ impl Replica {
             match self.state {
                 State::Leader => {
                     if self.leader_timer.fired() {
+                        // println!("broadcasting append entries");
+                        for peer in &self.peers {
+                            // println!(
+                            // "entries for peer {}: {:?}",
+                            // peer.id,
+                            // self.get_entries_for_peer(peer.id)
+                            // );
+                        }
                         self.broadcast_message(|p: &Peer| Message::AppendEntryRequest {
                             term: self.current_term,
                             from_id: self.id,
-                            prev_log_index: self.log.len() - 1,
-                            prev_log_term: self.log[self.log.len() - 1].term,
+                            prev_log_index: self.next_index[&p.id] - 1,
+                            prev_log_term: self.log[self.next_index[&p.id] - 1].term,
                             entries: self.get_entries_for_peer(p.id),
                             commit_index: self.commit_index,
                         });
@@ -203,18 +209,23 @@ impl Replica {
     }
 
     fn apply_ready_changes(&mut self) {
-        // Move the commit index to the lates log index that has been replicated
+        // Move the commit index to the latest log index that has been replicated
         // on the majority of the replicas.
         if self.state == State::Leader && self.commit_index < self.log.len() - 1 {
             let mut n = self.log.len() - 1;
             while n > self.commit_index {
                 let num_replications =
-                    self.next_index.iter().fold(
-                        0,
-                        |acc, nxt_idx| if nxt_idx.1 >= &n { acc + 1 } else { acc },
-                    );
+                    self.match_index
+                        .iter()
+                        .fold(0, |acc, mtch_idx| if mtch_idx.1 >= &n { acc + 1 } else { acc });
+
                 if num_replications * 2 >= self.peers.len() && self.log[n].term == self.current_term
                 {
+                    println!("match index {:?} log {:?}", self.match_index, self.log);
+                    println!(
+                        "counting replications: {}, setting commit index to {}",
+                        num_replications, n
+                    );
                     self.commit_index = n;
                 }
                 n -= 1;
@@ -223,9 +234,22 @@ impl Replica {
 
         // Apply changes that are behind the currently committed index.
         while self.commit_index > self.last_applied {
+            println!(
+                "applying change on {:?} {} commit index {} last applied {}->{} log {:?}",
+                self.state,
+                self.id,
+                self.commit_index,
+                self.last_applied,
+                self.last_applied + 1,
+                self.log
+            );
             self.last_applied += 1;
             self.value += self.log[self.last_applied].delta;
         }
+        println!(
+            "i am {:?} {} and my value is {} with commit index {} and log {:?} and match index {:?}",
+            self.state, self.id, self.value, self.commit_index, self.log, self.match_index
+        );
     }
 
     fn process_control_message(&mut self, message: ControlMessage) {
@@ -248,6 +272,7 @@ impl Replica {
                 last_index,
             } => {
                 if term > self.current_term {
+                    println!("i {} thought i was leader at term {} got term {} from {} becoming follower", self.id, self.current_term, term, from_id);
                     self.become_follower(term);
                 } else if success {
                     self.next_index.insert(from_id, last_index + 1);
@@ -261,6 +286,143 @@ impl Replica {
         }
     }
 
+    fn process_request_vote_request_as_follower(
+        &mut self,
+        from_id: usize,
+        term: usize,
+        last_log_index: usize,
+        last_log_term: usize,
+    ) {
+        if self.current_term > term {
+            self.send_message(
+                from_id,
+                Message::RequestVoteResponse {
+                    from_id: self.id,
+                    term: self.current_term,
+                    vote_granted: false,
+                },
+            );
+        } else if self.current_term < term {
+            self.become_follower(term);
+        }
+
+        if self.voted_for == None || self.voted_for == Some(from_id) {
+            if self.log[self.log.len() - 1].index <= last_log_index
+                && self.log[self.log.len() - 1].term <= last_log_term
+            {
+                self.send_message(
+                    from_id,
+                    Message::RequestVoteResponse {
+                        from_id: self.id,
+                        term: self.current_term,
+                        vote_granted: true,
+                    },
+                )
+            } else {
+                self.send_message(
+                    from_id,
+                    Message::RequestVoteResponse {
+                        from_id: self.id,
+                        term: self.current_term,
+                        vote_granted: false,
+                    },
+                );
+            }
+        } else {
+            self.send_message(
+                from_id,
+                Message::RequestVoteResponse {
+                    from_id: self.id,
+                    term: self.current_term,
+                    vote_granted: false,
+                },
+            );
+        }
+    }
+
+    fn process_append_entry_request_as_follower(
+        &mut self,
+        from_id: usize,
+        term: usize,
+        prev_log_index: usize,
+        prev_log_term: usize,
+        entries: Vec<Log>,
+        commit_index: usize,
+    ) {
+        if entries.len() != 0 {
+            println!("received non empty entries prev log index {} self log len {} prev term {} self prev term {}", prev_log_index, self.log.len(), prev_log_term, self.log[prev_log_index].term);
+        }
+        // Check that the leader's term is at least as large as ours.
+        if self.current_term > term {
+            println!(
+                "peer {} is follower and received term {} from {} is smaller than self term {}",
+                self.id, term, from_id, self.current_term
+            );
+            self.send_message(
+                from_id,
+                Message::AppendEntryResponse {
+                    from_id: self.id,
+                    term: self.current_term,
+                    success: false,
+                    last_index: self.log.len() - 1,
+                },
+            );
+            return;
+        // If our log doesn't contain an entry at prev_log_index with
+        // the prev_log_term term, reply false.
+        } else if prev_log_index >= self.log.len() || self.log[prev_log_index].term != prev_log_term
+        {
+            self.send_message(
+                from_id,
+                Message::AppendEntryResponse {
+                    from_id: self.id,
+                    term: self.current_term,
+                    success: false,
+                    last_index: self.log.len() - 1,
+                },
+            );
+            return;
+        }
+
+        if entries.len() != 0 {
+            println!("can append entries");
+        }
+
+        for entry in entries {
+            if entry.index < self.log.len() && entry.term != self.log[entry.index].term {
+                self.log.truncate(entry.index);
+            }
+
+            if entry.index == self.log.len() {
+                self.log.push(entry);
+            }
+        }
+
+        if commit_index > self.commit_index && self.log.len() != 0 {
+            self.commit_index = if commit_index < self.log[self.log.len() - 1].index {
+                commit_index
+            } else {
+                self.log[self.log.len() - 1].index
+            }
+        }
+
+        println!(
+            "my commit index as follower {}: {}",
+            self.id, self.commit_index
+        );
+
+        println!("{:?} {} responding success to {}", self.state, self.id, from_id);
+        self.send_message(
+            from_id,
+            Message::AppendEntryResponse {
+                from_id: self.id,
+                term: self.current_term,
+                success: true,
+                last_index: self.log.len() - 1,
+            },
+        );
+    }
+
     fn process_message_as_follower(&mut self, message: Message) {
         match message {
             Message::RequestVoteRequest {
@@ -268,120 +430,27 @@ impl Replica {
                 term,
                 last_log_index,
                 last_log_term,
-            } => {
-                if self.current_term > term {
-                    self.send_message(
-                        from_id,
-                        Message::RequestVoteResponse {
-                            from_id: self.id,
-                            term: self.current_term,
-                            vote_granted: false,
-                        },
-                    );
-                } else if self.current_term < term {
-                    self.become_follower(term);
-                }
-
-                if self.voted_for == None || self.voted_for == Some(from_id) {
-                    if self.log.len() == 0
-                        || (self.log[self.log.len() - 1].index <= last_log_index
-                            && self.log[self.log.len() - 1].term <= last_log_term)
-                    {
-                        self.send_message(
-                            from_id,
-                            Message::RequestVoteResponse {
-                                from_id: self.id,
-                                term: self.current_term,
-                                vote_granted: true,
-                            },
-                        )
-                    } else {
-                        self.send_message(
-                            from_id,
-                            Message::RequestVoteResponse {
-                                from_id: self.id,
-                                term: self.current_term,
-                                vote_granted: false,
-                            },
-                        );
-                    }
-                } else {
-                    self.send_message(
-                        from_id,
-                        Message::RequestVoteResponse {
-                            from_id: self.id,
-                            term: self.current_term,
-                            vote_granted: false,
-                        },
-                    );
-                }
-            }
+            } => self.process_request_vote_request_as_follower(
+                from_id,
+                term,
+                last_log_index,
+                last_log_term,
+            ),
             Message::AppendEntryRequest {
                 term,
                 from_id,
                 prev_log_index,
                 prev_log_term,
-                mut entries,
+                entries,
                 commit_index,
-            } => {
-                // Check that the leader's term is at least as large than ours.
-                if self.current_term > term {
-                    println!("peer {} is follower and received term {} from {} is smaller than self term {}", self.id, term, from_id, self.current_term);
-                    self.send_message(
-                        from_id,
-                        Message::AppendEntryResponse {
-                            from_id: self.id,
-                            term: self.current_term,
-                            success: false,
-                            last_index: 0, // TODO: fix
-                        },
-                    )
-                // If our log doesn't contain an entry at prev_log_index with
-                // the prev_log_term term, reply false.
-                } else if prev_log_index >= self.log.len()
-                    || self.log[prev_log_index].term != prev_log_term
-                {
-                    self.send_message(
-                        from_id,
-                        Message::AppendEntryResponse {
-                            from_id: self.id,
-                            term: self.current_term,
-                            success: false,
-                            last_index: 0, // TODO: fix
-                        },
-                    );
-                } else {
-                    self.send_message(
-                        from_id,
-                        Message::AppendEntryResponse {
-                            from_id: self.id,
-                            term: self.current_term,
-                            success: true,
-                            last_index: 0, //TODO: fix
-                        },
-                    );
-                }
-
-                for entry in &entries {
-                    if entry.index < self.log.len() && entry.term != self.log[entry.index].term {
-                        self.log.truncate(entry.index + 1);
-                    }
-                }
-
-                self.log.append(&mut entries);
-                if commit_index > self.commit_index && self.log.len() != 0 {
-                    self.commit_index = if commit_index < self.log[self.log.len() - 1].index {
-                        commit_index
-                    } else {
-                        self.log[self.log.len() - 1].index
-                    }
-                }
-
-                while self.last_applied < commit_index && self.last_applied < self.log.len() - 1 {
-                    self.value += self.log[self.last_applied + 1].delta;
-                    self.last_applied += 1;
-                }
-            }
+            } => self.process_append_entry_request_as_follower(
+                from_id,
+                term,
+                prev_log_index,
+                prev_log_term,
+                entries,
+                commit_index,
+            ),
             Message::AppendEntryResponse { .. } => { /* ignore */ }
             Message::RequestVoteResponse { .. } => { /* ignore */ }
         }
@@ -408,7 +477,7 @@ impl Replica {
                             from_id: self.id,
                             term: self.current_term,
                             success: false,
-                            last_index: 0, // TODO: fix
+                            last_index: self.log.len() - 1,
                         },
                     )
                 }
@@ -500,13 +569,11 @@ impl Replica {
         self.current_votes = Some(Box::new(votes));
         self.voted_for = Some(self.id);
         // Fan out vote requests.
-        self.broadcast_message(|_: &Peer| {
-            Message::RequestVoteRequest {
-                from_id: self.id,
-                term: self.current_term,
-                last_log_index: 0, /* TODO: fix */
-                last_log_term: 0,  /* TODO: fix */
-            }
+        self.broadcast_message(|_: &Peer| Message::RequestVoteRequest {
+            from_id: self.id,
+            term: self.current_term,
+            last_log_index: self.log.len() - 1,
+            last_log_term: self.log[self.log.len() - 1].term,
         });
     }
 }

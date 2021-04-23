@@ -1,7 +1,7 @@
 use crossbeam::channel::{bounded, Receiver, Sender};
 use std::{thread, time::Duration};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum State {
     Follower,
     Candidate,
