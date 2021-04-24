@@ -1,6 +1,10 @@
 mod replicas;
 mod types;
 
+// TODO: network partitioning into custom groups
+
+// TODO: implement unreliable and delayed delivery
+
 use crossbeam::channel::{Receiver, Sender};
 use crossbeam_channel::unbounded;
 use replicas::Replica;
@@ -82,6 +86,8 @@ fn process_control_messages(transmitters: Vec<PeerSenderProto>) {
                 "Up" => Some(ControlMessage::Up),
                 "Down" => Some(ControlMessage::Down),
                 "Apply" => Some(ControlMessage::Apply(delta)),
+                "Connect" => Some(ControlMessage::Connect),
+                "Disconnect" => Some(ControlMessage::Disconnect),
                 _ => None,
             };
 

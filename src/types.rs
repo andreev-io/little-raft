@@ -13,6 +13,8 @@ pub enum ControlMessage {
     Up,
     Down,
     Apply(i32),
+    Disconnect,
+    Connect,
 }
 
 #[derive(Clone, Debug)]

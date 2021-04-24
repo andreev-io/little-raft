@@ -12,6 +12,8 @@ const NOT_LEADER_MIN_TIMEOUT: u64 = 2000;
 const NOT_LEADER_MAX_TIMEOUT: u64 = 3500;
 
 pub struct Replica {
+    // Whether the replica can send & receive messages.
+    connected: bool,
     // This is simply the value the consistency of which the consensus
     // maintains.
     value: i32,
@@ -61,6 +63,7 @@ impl Replica {
         peers: Vec<Peer>,
     ) {
         let mut replica = Replica {
+            connected: true,
             value: 0,
             id: id,
             current_term: 0,
@@ -90,15 +93,19 @@ impl Replica {
     }
 
     fn send_message(&self, peer_id: usize, message: Message) {
-        self.get_peer_by_id(peer_id).send(message);
+        if self.connected {
+            self.get_peer_by_id(peer_id).send(message);
+        }
     }
 
     fn broadcast_message<F>(&self, message_generator: F)
     where
         F: Fn(&Peer) -> Message,
     {
-        for peer in &self.peers {
-            peer.send(message_generator(peer));
+        if self.connected {
+            for peer in &self.peers {
+                peer.send(message_generator(peer));
+            }
         }
     }
 
@@ -110,9 +117,13 @@ impl Replica {
         let (oper1, oper2) = (select.recv(&self.rx), select.recv(&self.rx_control));
         match select.select_timeout(timeout) {
             Ok(oper) => match oper.index() {
-                i if i == oper1 => match oper.recv(&self.rx) {
-                    Ok(msg) => (Some(msg), None),
-                    Err(_) => panic!("unexpected error"),
+                i if i == oper1 => match (oper.recv(&self.rx), self.connected) {
+                    (Ok(msg), true) => (Some(msg), None),
+                    (Ok(_), false) => {
+                        println!("peer {} dropping message because discnnected", self.id);
+                        (None, None)
+                    }
+                    (Err(_), _) => panic!("unexpected error"),
                 },
                 i if i == oper2 => match oper.recv(&self.rx_control) {
                     Ok(msg) => (None, Some(msg)),
@@ -125,10 +136,6 @@ impl Replica {
     }
 
     fn get_entries_for_peer(&self, peer_id: usize) -> Vec<Log> {
-        // println!(
-        // "my logs {:?}, next index for peer {}",
-        // self.log, self.next_index[&peer_id]
-        // );
         (&self.log[self.next_index[&peer_id]..self.log.len()]).to_vec()
     }
 
@@ -138,14 +145,6 @@ impl Replica {
             match self.state {
                 State::Leader => {
                     if self.leader_timer.fired() {
-                        // println!("broadcasting append entries");
-                        for peer in &self.peers {
-                            // println!(
-                            // "entries for peer {}: {:?}",
-                            // peer.id,
-                            // self.get_entries_for_peer(peer.id)
-                            // );
-                        }
                         self.broadcast_message(|p: &Peer| Message::AppendEntryRequest {
                             term: self.current_term,
                             from_id: self.id,
@@ -209,15 +208,16 @@ impl Replica {
     }
 
     fn apply_ready_changes(&mut self) {
-        // Move the commit index to the latest log index that has been replicated
-        // on the majority of the replicas.
+        // Move the commit index to the latest log index that has been
+        // replicated on the majority of the replicas.
         if self.state == State::Leader && self.commit_index < self.log.len() - 1 {
             let mut n = self.log.len() - 1;
             while n > self.commit_index {
                 let num_replications =
-                    self.match_index
-                        .iter()
-                        .fold(0, |acc, mtch_idx| if mtch_idx.1 >= &n { acc + 1 } else { acc });
+                    self.match_index.iter().fold(
+                        0,
+                        |acc, mtch_idx| if mtch_idx.1 >= &n { acc + 1 } else { acc },
+                    );
 
                 if num_replications * 2 >= self.peers.len() && self.log[n].term == self.current_term
                 {
@@ -247,9 +247,19 @@ impl Replica {
             self.value += self.log[self.last_applied].delta;
         }
         println!(
-            "i am {:?} {} and my value is {} with commit index {} and log {:?} and match index {:?}",
-            self.state, self.id, self.value, self.commit_index, self.log, self.match_index
+            "i am {:?} {} and my value is {} term {} with commit index {} and log {:?} and match index {:?}",
+            self.state, self.id, self.value, self.current_term, self.commit_index, self.log, self.match_index
         );
+    }
+
+    fn become_disconnected(&mut self) {
+        println!("peer {} becoming disconnected", self.id);
+        self.connected = false;
+    }
+
+    fn become_connected(&mut self) {
+        println!("peer {} becoming connected", self.id);
+        self.connected = true;
     }
 
     fn process_control_message(&mut self, message: ControlMessage) {
@@ -260,6 +270,8 @@ impl Replica {
                 State::Leader => self.append(delta),
                 _ => {}
             },
+            ControlMessage::Disconnect => self.become_disconnected(),
+            ControlMessage::Connect => self.become_connected(),
         }
     }
 
@@ -349,7 +361,7 @@ impl Replica {
         entries: Vec<Log>,
         commit_index: usize,
     ) {
-        if entries.len() != 0 {
+        if entries.len() != 0 && prev_log_index < self.log.len() {
             println!("received non empty entries prev log index {} self log len {} prev term {} self prev term {}", prev_log_index, self.log.len(), prev_log_term, self.log[prev_log_index].term);
         }
         // Check that the leader's term is at least as large as ours.
@@ -411,7 +423,10 @@ impl Replica {
             self.id, self.commit_index
         );
 
-        println!("{:?} {} responding success to {}", self.state, self.id, from_id);
+        println!(
+            "{:?} {} responding success to {}",
+            self.state, self.id, from_id
+        );
         self.send_message(
             from_id,
             Message::AppendEntryResponse {
@@ -519,18 +534,27 @@ impl Replica {
 
     fn become_alive(&mut self) {
         println!("peer {} becoming alive", self.id);
-        if self.prev_state == State::Dead {
-            self.become_follower(0);
-        } else {
-            self.state = self.prev_state;
-        }
-        self.prev_state = State::Dead;
+        self.state = self.prev_state;
     }
 
     fn become_dead(&mut self) {
         println!("peer {} becoming dead", self.id);
-        self.prev_state = self.state;
+        self.prev_state = match self.state {
+            State::Dead => self.prev_state,
+            _ => self.state,
+        };
         self.state = State::Dead;
+
+        // Destroy volatile state.
+        self.commit_index = 0;
+        self.last_applied = 0;
+        self.value = 0;
+        self.next_index = BTreeMap::new();
+        self.match_index = BTreeMap::new();
+        for peer in &self.peers {
+            self.next_index.insert(peer.id, self.log.len());
+            self.match_index.insert(peer.id, 0);
+        }
     }
 
     fn become_leader(&mut self) {
@@ -547,6 +571,13 @@ impl Replica {
             self.next_index.insert(peer.id, self.log.len());
             self.match_index.insert(peer.id, 0);
         }
+
+        // If the previous leader had some uncommitted entries that were
+        // replicated to this now-leader server, this server will not commit
+        // them until its commit index advanced to a log entry appended in this
+        // leader's term. To carry out this operation as soon as the new leader
+        // emerges, append a no-op entry (part 8 of the paper).
+        self.append(0);
     }
 
     fn become_follower(&mut self, term: usize) {
