@@ -1,5 +1,7 @@
+5: Apply+1 //
+4: Down //
 3: Disconnect //
-3: Down //
-3: Up //
-3: Apply+1 //
-3: Connect //
+5: Disconnect //
+4: Up //
+2: Down //
+1: Apply-11 //

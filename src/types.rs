@@ -17,6 +17,18 @@ pub enum ControlMessage {
     Connect,
 }
 
+#[derive(Debug)]
+pub struct ReplicaStatus {
+    pub id: usize,
+    pub state: State,
+    pub connected: bool,
+    pub value: i32,
+    pub term: usize,
+    pub commit_index: usize,
+    pub last_applied: usize,
+    pub log: Vec<Log>,
+}
+
 #[derive(Clone, Debug)]
 pub enum Message {
     AppendEntryRequest {
@@ -69,13 +81,13 @@ pub struct Log {
     pub term: usize,
 }
 
-pub struct LeaderTimer {
+pub struct HeartbeatTimer {
     timeout: Duration,
     rx: Receiver<()>,
 }
 
-impl LeaderTimer {
-    pub fn new(timeout: Duration) -> LeaderTimer {
+impl HeartbeatTimer {
+    pub fn new(timeout: Duration) -> HeartbeatTimer {
         let (tx, rx) = bounded(1);
 
         thread::spawn(move || {
@@ -83,7 +95,7 @@ impl LeaderTimer {
             tx.send(()).unwrap();
         });
 
-        LeaderTimer {
+        HeartbeatTimer {
             timeout: timeout,
             rx: rx,
         }

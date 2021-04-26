@@ -1,35 +1,126 @@
 mod replicas;
 mod types;
 
-// TODO: network partitioning into custom groups
-
-// TODO: implement unreliable and delayed delivery
-
+use colored::*;
 use crossbeam::channel::{Receiver, Sender};
 use crossbeam_channel::unbounded;
 use replicas::Replica;
-use std::{fs::File, io::prelude::*, thread, time::Duration};
-use types::{ControlMessage, Message, Peer};
+use std::{collections::BTreeMap, fs::File, io::prelude::*, thread, time::Duration};
+use types::{ControlMessage, Message, Peer, ReplicaStatus, State};
 
-const REPLICAS: usize = 5;
+const NUM_REPLICAS: usize = 5;
 
 type PeerSenderProto = (usize, Sender<Message>, Sender<ControlMessage>);
 type PeerReceiverProto = (usize, Receiver<Message>, Receiver<ControlMessage>);
 
 fn main() {
     let (mut receivers, mut transmitters) = (Vec::new(), Vec::new());
-    for id in 1..=REPLICAS {
+    for id in 1..=NUM_REPLICAS {
         let (tx, rx) = unbounded();
         let (tx_control, rx_control) = unbounded();
         transmitters.push((id, tx, tx_control));
         receivers.push((id, rx, rx_control));
     }
 
-    start_replica_threads(receivers, &transmitters);
+    let (tx_status, rx_status) = unbounded();
+    start_replica_threads(tx_status, receivers, &transmitters);
+    thread::spawn(move || {
+        process_status_messages(rx_status);
+    });
     process_control_messages(transmitters);
 }
 
+// This function blocks forever.
+fn process_status_messages(rx_status: Receiver<ReplicaStatus>) {
+    let mut statuses = BTreeMap::new();
+    loop {
+        let status = rx_status.recv().unwrap();
+        statuses.insert(status.id, status);
+        if statuses.len() == NUM_REPLICAS {
+            let mut ordered_statuses = statuses
+                .iter()
+                .map(|status| status.1)
+                .collect::<Vec<&ReplicaStatus>>();
+            ordered_statuses.sort_by_key(|status| status.id);
+            let mut output = String::from("");
+            for status in ordered_statuses.iter() {
+                output.push_str(&print_status(status));
+            }
+
+            print!("{esc}[2J{esc}[1;1H{output}", esc = 27 as char, output = output);
+            println!("{}", format!("{}, {}, {}, {}, {}.", "Leaders are cyan".cyan(), "Candidates are blue".blue(), "Followers are magenta".magenta(), "Deads are red".red(),  "Disconnected replicas are yellow".yellow()).bold());
+            println!("{}", format!("{}, {}, {}.", "Applied logs are green".green(), "Committed not yet applied logs are magenta".magenta(), "Appended unprocessed logs are yellow".yellow()).bold());
+            statuses = BTreeMap::new();
+        }
+    }
+}
+
+fn print_status(status: &ReplicaStatus) -> String {
+    let mut output = String::from("");
+    let state = if status.connected {
+        match status.state {
+            State::Candidate => format!("{:?}", status.state).blue(),
+            State::Leader => format!("{:?}", status.state).cyan(),
+            State::Follower => format!("{:?}", status.state).magenta(),
+            State::Dead => format!("{:?}", status.state).red(),
+        }
+    } else {
+        format!(
+            "Disconnected {}",
+            String::from(format!("{:?}", status.state)).to_lowercase()
+        ).yellow()
+    };
+
+    output.push_str(&format!(
+        "{}\n",
+        format!("Replica {}", status.id).bold().green()
+    ));
+    output.push_str(&format!(
+        "{} with value {} at term {}.\n",
+        state.bold(),
+        status.value.to_string().bold().cyan(),
+        status.term.to_string().bold().cyan()
+    ));
+
+    let mut log_string = String::from("");
+    for (i, log_entry) in status.log.iter().enumerate() {
+        if log_entry.delta == 0 {
+            continue;
+        }
+
+        let delta_with_sign = if log_entry.delta >= 0 {
+            format!("+{}", log_entry.delta)
+        } else {
+            format!("{}", log_entry.delta)
+        };
+
+        if i <= status.last_applied {
+            log_string = format!(
+                "{} {}",
+                log_string,
+                format!("(delta {}, term {}) ->", delta_with_sign, log_entry.term).green()
+            );
+        } else if i <= status.commit_index {
+            log_string = format!(
+                "{} {}",
+                log_string,
+                format!("(delta {}, term {}) ->", delta_with_sign, log_entry.term).magenta()
+            );
+        } else {
+            log_string = format!(
+                "{} {}",
+                log_string,
+                format!("(delta {}, term {}) ->", delta_with_sign, log_entry.term).yellow()
+            );
+        }
+    }
+    output.push_str(&format!("{} {}\n\n", String::from("Log:").bold(), log_string));
+
+    output
+}
+
 fn start_replica_threads(
+    tx_status: Sender<ReplicaStatus>,
     mut receivers: Vec<PeerReceiverProto>,
     transmitters: &Vec<PeerSenderProto>,
 ) {
@@ -41,8 +132,9 @@ fn start_replica_threads(
             .filter(|peer| peer.id != id)
             .collect();
 
+        let t = tx_status.clone();
         thread::spawn(move || {
-            Replica::start(id, rx, rx_control, peers);
+            Replica::start(id, rx, rx_control, t, peers);
         });
     }
 }
@@ -55,6 +147,7 @@ fn parse_control_line(s: &str) -> (usize, String) {
     return (idx, command);
 }
 
+// This function blocks forever.
 fn process_control_messages(transmitters: Vec<PeerSenderProto>) {
     let mut next_unprocessed_line: usize = 0;
     loop {
@@ -98,9 +191,8 @@ fn process_control_messages(transmitters: Vec<PeerSenderProto>) {
                 .2
                 .send(message)
                 .unwrap();
-                println!("Processed line {}", next_unprocessed_line);
             } else {
-                println!("Unknown control message. Valid formats: \"5: Down //\" or \"1: Up //\" or \"2: Apply -11//\"");
+                panic!("Unknown control message. Valid formats: \"5: Down //\" or \"1: Up //\" or \"2: Apply -11//\" or \"2: Connect//\" or \"4: Disconnect//\"");
             }
         }
 

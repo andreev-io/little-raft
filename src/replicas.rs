@@ -1,5 +1,5 @@
-use crate::types::{ControlMessage, LeaderTimer, Log, Message, Peer, State};
-use crossbeam::channel::Receiver;
+use crate::types::{ControlMessage, HeartbeatTimer, Log, Message, Peer, ReplicaStatus, State};
+use crossbeam::channel::{Receiver, Sender};
 use crossbeam_channel::Select;
 use rand::Rng;
 use std::{
@@ -7,9 +7,9 @@ use std::{
     time::Duration,
 };
 
-const LEADER_TIMEOUT: u64 = 500;
-const NOT_LEADER_MIN_TIMEOUT: u64 = 2000;
-const NOT_LEADER_MAX_TIMEOUT: u64 = 3500;
+const HEARTBEAT_TIMEOUT: u64 = 1000;
+const ELECTION_MIN_TIMEOUT: u64 = 2500;
+const ELECTION_MAX_TIMEOUT: u64 = 3500;
 
 pub struct Replica {
     // Whether the replica can send & receive messages.
@@ -28,10 +28,12 @@ pub struct Replica {
     rx: Receiver<Message>,
     // Receiving end of a channel for forced state change messages.
     rx_control: Receiver<ControlMessage>,
+    // Sending end of a channel for status messages.
+    tx_status: Sender<ReplicaStatus>,
     // State of this replica.
     state: State,
     // State before dying.
-    prev_state: State,
+    prev_state: Option<State>,
     // Vector of peers, i.e. their IDs and the corresponding transmission ends
     // of mpsc channels.
     peers: Vec<Peer>,
@@ -40,9 +42,9 @@ pub struct Replica {
     // Logs are simply the terms when the corresponding command was received by
     // the then-leader.
     log: Vec<Log>,
-    // Index of highest log entry known to be committed.
+    // Index of the highest log entry known to be committed.
     commit_index: usize,
-    // Index of highest log entry applied to the state machine.
+    // Index of the highest log entry applied to the state machine.
     last_applied: usize,
     // For each server, index of the next log entry to send to that server. Only
     // present on leaders.
@@ -51,7 +53,7 @@ pub struct Replica {
     // that server. Only present on leaders.
     match_index: BTreeMap<usize, usize>,
     // Timer to times heartbeat messages on the leader.
-    leader_timer: LeaderTimer,
+    heartbeat_timer: HeartbeatTimer,
 }
 
 impl Replica {
@@ -60,6 +62,7 @@ impl Replica {
         id: usize,
         rx: Receiver<Message>,
         rx_control: Receiver<ControlMessage>,
+        tx_status: Sender<ReplicaStatus>,
         peers: Vec<Peer>,
     ) {
         let mut replica = Replica {
@@ -70,8 +73,9 @@ impl Replica {
             current_votes: None,
             rx: rx,
             rx_control: rx_control,
+            tx_status: tx_status,
             state: State::Follower,
-            prev_state: State::Dead,
+            prev_state: None,
             peers: peers,
             voted_for: None,
             log: vec![
@@ -86,7 +90,7 @@ impl Replica {
             last_applied: 0,
             next_index: BTreeMap::new(),
             match_index: BTreeMap::new(),
-            leader_timer: LeaderTimer::new(Duration::from_millis(LEADER_TIMEOUT)),
+            heartbeat_timer: HeartbeatTimer::new(Duration::from_millis(HEARTBEAT_TIMEOUT)),
         };
 
         replica.poll();
@@ -119,10 +123,7 @@ impl Replica {
             Ok(oper) => match oper.index() {
                 i if i == oper1 => match (oper.recv(&self.rx), self.connected) {
                     (Ok(msg), true) => (Some(msg), None),
-                    (Ok(_), false) => {
-                        println!("peer {} dropping message because discnnected", self.id);
-                        (None, None)
-                    }
+                    (Ok(_), false) => (None, None),
                     (Err(_), _) => panic!("unexpected error"),
                 },
                 i if i == oper2 => match oper.recv(&self.rx_control) {
@@ -142,9 +143,22 @@ impl Replica {
     fn poll(&mut self) {
         let mut rng = rand::thread_rng();
         loop {
+            self.tx_status
+                .send(ReplicaStatus {
+                    id: self.id,
+                    state: self.state,
+                    connected: self.connected,
+                    value: self.value,
+                    term: self.current_term,
+                    commit_index: self.commit_index,
+                    last_applied: self.last_applied,
+                    log: self.log.clone(),
+                })
+                .unwrap();
+
             match self.state {
                 State::Leader => {
-                    if self.leader_timer.fired() {
+                    if self.heartbeat_timer.fired() {
                         self.broadcast_message(|p: &Peer| Message::AppendEntryRequest {
                             term: self.current_term,
                             from_id: self.id,
@@ -153,10 +167,10 @@ impl Replica {
                             entries: self.get_entries_for_peer(p.id),
                             commit_index: self.commit_index,
                         });
-                        self.leader_timer.renew();
+                        self.heartbeat_timer.renew();
                     }
 
-                    let timeout = Duration::from_millis(LEADER_TIMEOUT);
+                    let timeout = Duration::from_millis(HEARTBEAT_TIMEOUT);
                     let messages = self.read_message_with_timeout(timeout);
                     match messages {
                         (Some(msg), None) => self.process_message_as_leader(msg),
@@ -167,7 +181,7 @@ impl Replica {
                 }
                 State::Follower => {
                     let timeout = Duration::from_millis(
-                        rng.gen_range(NOT_LEADER_MIN_TIMEOUT..=NOT_LEADER_MAX_TIMEOUT),
+                        rng.gen_range(ELECTION_MIN_TIMEOUT..=ELECTION_MAX_TIMEOUT),
                     );
                     let messages = self.read_message_with_timeout(timeout);
                     match messages {
@@ -179,7 +193,7 @@ impl Replica {
                 }
                 State::Candidate => {
                     let timeout = Duration::from_millis(
-                        rng.gen_range(NOT_LEADER_MIN_TIMEOUT..=NOT_LEADER_MAX_TIMEOUT),
+                        rng.gen_range(ELECTION_MIN_TIMEOUT..=ELECTION_MAX_TIMEOUT),
                     );
                     let messages = self.read_message_with_timeout(timeout);
                     match messages {
@@ -190,8 +204,13 @@ impl Replica {
                     };
                 }
                 State::Dead => {
-                    let message = self.rx_control.recv().unwrap();
-                    self.process_control_message(message);
+                    match self
+                        .rx_control
+                        .recv_timeout(Duration::from_millis(ELECTION_MIN_TIMEOUT))
+                    {
+                        Ok(msg) => self.process_control_message(msg),
+                        Err(_) => {}
+                    }
                 }
             }
 
@@ -221,11 +240,6 @@ impl Replica {
 
                 if num_replications * 2 >= self.peers.len() && self.log[n].term == self.current_term
                 {
-                    println!("match index {:?} log {:?}", self.match_index, self.log);
-                    println!(
-                        "counting replications: {}, setting commit index to {}",
-                        num_replications, n
-                    );
                     self.commit_index = n;
                 }
                 n -= 1;
@@ -234,31 +248,16 @@ impl Replica {
 
         // Apply changes that are behind the currently committed index.
         while self.commit_index > self.last_applied {
-            println!(
-                "applying change on {:?} {} commit index {} last applied {}->{} log {:?}",
-                self.state,
-                self.id,
-                self.commit_index,
-                self.last_applied,
-                self.last_applied + 1,
-                self.log
-            );
             self.last_applied += 1;
             self.value += self.log[self.last_applied].delta;
         }
-        println!(
-            "i am {:?} {} and my value is {} term {} with commit index {} and log {:?} and match index {:?}",
-            self.state, self.id, self.value, self.current_term, self.commit_index, self.log, self.match_index
-        );
     }
 
     fn become_disconnected(&mut self) {
-        println!("peer {} becoming disconnected", self.id);
         self.connected = false;
     }
 
     fn become_connected(&mut self) {
-        println!("peer {} becoming connected", self.id);
         self.connected = true;
     }
 
@@ -284,7 +283,6 @@ impl Replica {
                 last_index,
             } => {
                 if term > self.current_term {
-                    println!("i {} thought i was leader at term {} got term {} from {} becoming follower", self.id, self.current_term, term, from_id);
                     self.become_follower(term);
                 } else if success {
                     self.next_index.insert(from_id, last_index + 1);
@@ -361,15 +359,8 @@ impl Replica {
         entries: Vec<Log>,
         commit_index: usize,
     ) {
-        if entries.len() != 0 && prev_log_index < self.log.len() {
-            println!("received non empty entries prev log index {} self log len {} prev term {} self prev term {}", prev_log_index, self.log.len(), prev_log_term, self.log[prev_log_index].term);
-        }
         // Check that the leader's term is at least as large as ours.
         if self.current_term > term {
-            println!(
-                "peer {} is follower and received term {} from {} is smaller than self term {}",
-                self.id, term, from_id, self.current_term
-            );
             self.send_message(
                 from_id,
                 Message::AppendEntryResponse {
@@ -396,10 +387,6 @@ impl Replica {
             return;
         }
 
-        if entries.len() != 0 {
-            println!("can append entries");
-        }
-
         for entry in entries {
             if entry.index < self.log.len() && entry.term != self.log[entry.index].term {
                 self.log.truncate(entry.index);
@@ -418,15 +405,6 @@ impl Replica {
             }
         }
 
-        println!(
-            "my commit index as follower {}: {}",
-            self.id, self.commit_index
-        );
-
-        println!(
-            "{:?} {} responding success to {}",
-            self.state, self.id, from_id
-        );
         self.send_message(
             from_id,
             Message::AppendEntryResponse {
@@ -485,7 +463,6 @@ impl Replica {
                     self.become_follower(term);
                     self.process_message_as_follower(message);
                 } else {
-                    println!("peer {} is candidate and received term {} from {} is smaller than self term {}", self.id, term, from_id, self.current_term);
                     self.send_message(
                         from_id,
                         Message::AppendEntryResponse {
@@ -533,15 +510,15 @@ impl Replica {
     }
 
     fn become_alive(&mut self) {
-        println!("peer {} becoming alive", self.id);
-        self.state = self.prev_state;
+        if let Some(prev_state) = self.prev_state {
+            self.state = prev_state;
+        }
     }
 
     fn become_dead(&mut self) {
-        println!("peer {} becoming dead", self.id);
         self.prev_state = match self.state {
             State::Dead => self.prev_state,
-            _ => self.state,
+            _ => Some(self.state),
         };
         self.state = State::Dead;
 
@@ -558,10 +535,6 @@ impl Replica {
     }
 
     fn become_leader(&mut self) {
-        println!(
-            "peer {} is now leader with term {}",
-            self.id, self.current_term
-        );
         self.state = State::Leader;
         self.current_votes = None;
         self.voted_for = None;
@@ -581,7 +554,6 @@ impl Replica {
     }
 
     fn become_follower(&mut self, term: usize) {
-        println!("peer {} is now follower with term {}", self.id, term);
         self.current_term = term;
         self.state = State::Follower;
         self.current_votes = None;
@@ -591,7 +563,6 @@ impl Replica {
     fn become_candidate(&mut self) {
         // Increase current term.
         self.current_term += 1;
-        println!("peer {} is candidate term {}", self.id, self.current_term);
         // Claim yourself a candidate.
         self.state = State::Candidate;
         // Initialize votes. Vote for yourself.
