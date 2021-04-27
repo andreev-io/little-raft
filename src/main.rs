@@ -1,5 +1,9 @@
+extern crate clap;
+
 mod replicas;
 mod types;
+
+use clap::{App, Arg};
 
 use colored::*;
 use crossbeam::channel::{Receiver, Sender};
@@ -8,15 +12,10 @@ use replicas::Replica;
 use std::{collections::BTreeMap, fs, thread, time::Duration};
 use types::{ControlMessage, Message, Peer, ReplicaStatus, State};
 
-const NUM_REPLICAS: usize = 5;
-
 type PeerSenderProto = (usize, Sender<Message>, Sender<ControlMessage>);
 type PeerReceiverProto = (usize, Receiver<Message>, Receiver<ControlMessage>);
 
-// TODO: Unreliable delivery
-//
-// TODO: probability dropping a message & num replicas configurable via flags
-//
+
 // TODO: stdin command input && stdout instructions
 //
 // TODO: refactoring
@@ -24,29 +23,52 @@ type PeerReceiverProto = (usize, Receiver<Message>, Receiver<ControlMessage>);
 // TODO: readme
 
 fn main() {
+    let matches = App::new("Raft")
+        .version("1.0")
+        .author("Ilya Andreev <iandre3@illiois.edu>")
+        .arg(
+            Arg::with_name("num-replicas")
+                .long("num-replicas")
+                .value_name("NUM_REPLICAS")
+                .takes_value(true)
+                .required(true),
+        )
+        .arg(
+            Arg::with_name("message-drop-percent-probability")
+                .long("message-drop-percent-probability")
+                .value_name("MESSAGE_DROP_PERCENT_PROBABILITY")
+                .takes_value(true)
+                .required(true),
+        )
+        .get_matches();
+
+    let num_replicas = matches.value_of("num-replicas").unwrap().parse().unwrap();
+    println!("Spinning up {} replicas", num_replicas);
     let (mut receivers, mut transmitters) = (Vec::new(), Vec::new());
-    for id in 1..=NUM_REPLICAS {
+    for id in 1..=num_replicas {
         let (tx, rx) = unbounded();
         let (tx_control, rx_control) = unbounded();
         transmitters.push((id, tx, tx_control));
         receivers.push((id, rx, rx_control));
     }
 
+    let drop_prob = matches.value_of("message-drop-percent-probability").unwrap().parse().unwrap();
+    println!("Dropping messages with {}% probability", drop_prob);
     let (tx_status, rx_status) = unbounded();
-    start_replica_threads(tx_status, receivers, &transmitters);
+    start_replica_threads(tx_status, receivers, &transmitters, drop_prob);
     thread::spawn(move || {
-        process_status_messages(rx_status);
+        process_status_messages(rx_status, num_replicas);
     });
     process_control_messages(transmitters);
 }
 
 // This function blocks forever.
-fn process_status_messages(rx_status: Receiver<ReplicaStatus>) {
+fn process_status_messages(rx_status: Receiver<ReplicaStatus>, num_replicas: usize) {
     let mut statuses = BTreeMap::new();
     loop {
         let status = rx_status.recv().unwrap();
         statuses.insert(status.id, status);
-        if statuses.len() == NUM_REPLICAS {
+        if statuses.len() == num_replicas {
             let mut ordered_statuses = statuses
                 .iter()
                 .map(|status| status.1)
@@ -162,12 +184,13 @@ fn start_replica_threads(
     tx_status: Sender<ReplicaStatus>,
     mut receivers: Vec<PeerReceiverProto>,
     transmitters: &Vec<PeerSenderProto>,
+    drop_prob: usize,
 ) {
     while let Some((id, rx, rx_control)) = receivers.pop() {
         let peers = transmitters
             .clone()
             .iter()
-            .map(|tuple| Peer::new(tuple.0, tuple.1.clone()))
+            .map(|tuple| Peer::new(tuple.0, tuple.1.clone(), drop_prob))
             .filter(|peer| peer.id != id)
             .collect();
 
@@ -192,7 +215,10 @@ fn process_control_messages(transmitters: Vec<PeerSenderProto>) {
     loop {
         let buffer = match fs::read_to_string("input.txt") {
             Ok(buf) => buf,
-            Err(_) => { println!("Could not open input.txt"); continue; }
+            Err(_) => {
+                println!("Could not open input.txt");
+                continue;
+            }
         };
 
         let lines: Vec<&str> = buffer.split("\n").collect();
