@@ -5,13 +5,23 @@ use colored::*;
 use crossbeam::channel::{Receiver, Sender};
 use crossbeam_channel::unbounded;
 use replicas::Replica;
-use std::{collections::BTreeMap, fs::File, io::prelude::*, thread, time::Duration};
+use std::{collections::BTreeMap, fs, thread, time::Duration};
 use types::{ControlMessage, Message, Peer, ReplicaStatus, State};
 
 const NUM_REPLICAS: usize = 5;
 
 type PeerSenderProto = (usize, Sender<Message>, Sender<ControlMessage>);
 type PeerReceiverProto = (usize, Receiver<Message>, Receiver<ControlMessage>);
+
+// TODO: Unreliable delivery
+//
+// TODO: probability dropping a message & num replicas configurable via flags
+//
+// TODO: stdin command input && stdout instructions
+//
+// TODO: refactoring
+//
+// TODO: readme
 
 fn main() {
     let (mut receivers, mut transmitters) = (Vec::new(), Vec::new());
@@ -47,9 +57,33 @@ fn process_status_messages(rx_status: Receiver<ReplicaStatus>) {
                 output.push_str(&print_status(status));
             }
 
-            print!("{esc}[2J{esc}[1;1H{output}", esc = 27 as char, output = output);
-            println!("{}", format!("{}, {}, {}, {}, {}.", "Leaders are cyan".cyan(), "Candidates are blue".blue(), "Followers are magenta".magenta(), "Deads are red".red(),  "Disconnected replicas are yellow".yellow()).bold());
-            println!("{}", format!("{}, {}, {}.", "Applied logs are green".green(), "Committed not yet applied logs are magenta".magenta(), "Appended unprocessed logs are yellow".yellow()).bold());
+            print!(
+                "{esc}[2J{esc}[1;1H{output}",
+                esc = 27 as char,
+                output = output
+            );
+            println!(
+                "{}",
+                format!(
+                    "{}, {}, {}, {}, {}.",
+                    "Leaders are cyan".cyan(),
+                    "Candidates are blue".blue(),
+                    "Followers are magenta".magenta(),
+                    "Deads are red".red(),
+                    "Disconnected replicas are yellow".yellow()
+                )
+                .bold()
+            );
+            println!(
+                "{}",
+                format!(
+                    "{}, {}, {}.",
+                    "Applied logs are green".green(),
+                    "Committed not yet applied logs are magenta".magenta(),
+                    "Appended unprocessed logs are yellow".yellow()
+                )
+                .bold()
+            );
             statuses = BTreeMap::new();
         }
     }
@@ -68,7 +102,8 @@ fn print_status(status: &ReplicaStatus) -> String {
         format!(
             "Disconnected {}",
             String::from(format!("{:?}", status.state)).to_lowercase()
-        ).yellow()
+        )
+        .yellow()
     };
 
     output.push_str(&format!(
@@ -114,7 +149,11 @@ fn print_status(status: &ReplicaStatus) -> String {
             );
         }
     }
-    output.push_str(&format!("{} {}\n\n", String::from("Log:").bold(), log_string));
+    output.push_str(&format!(
+        "{} {}\n\n",
+        String::from("Log:").bold(),
+        log_string
+    ));
 
     output
 }
@@ -151,11 +190,10 @@ fn parse_control_line(s: &str) -> (usize, String) {
 fn process_control_messages(transmitters: Vec<PeerSenderProto>) {
     let mut next_unprocessed_line: usize = 0;
     loop {
-        let mut buffer = String::new();
-        File::open("input.txt")
-            .unwrap()
-            .read_to_string(&mut buffer)
-            .unwrap();
+        let buffer = match fs::read_to_string("input.txt") {
+            Ok(buf) => buf,
+            Err(_) => { println!("Could not open input.txt"); continue; }
+        };
 
         let lines: Vec<&str> = buffer.split("\n").collect();
         if lines.len() >= next_unprocessed_line + 1 && lines[next_unprocessed_line].contains("//") {
