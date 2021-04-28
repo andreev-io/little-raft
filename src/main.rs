@@ -15,7 +15,6 @@ use types::{ControlMessage, Message, Peer, ReplicaStatus, State};
 type PeerSenderProto = (usize, Sender<Message>, Sender<ControlMessage>);
 type PeerReceiverProto = (usize, Receiver<Message>, Receiver<ControlMessage>);
 
-
 // TODO: stdin command input && stdout instructions
 //
 // TODO: refactoring
@@ -52,9 +51,14 @@ fn main() {
         receivers.push((id, rx, rx_control));
     }
 
-    let drop_prob = matches.value_of("message-drop-percent-probability").unwrap().parse().unwrap();
+    let drop_prob = matches
+        .value_of("message-drop-percent-probability")
+        .unwrap()
+        .parse()
+        .unwrap();
     println!("Dropping messages with {}% probability", drop_prob);
     let (tx_status, rx_status) = unbounded();
+    // print!("{esc}[2J{esc}[1;1H", esc = 27 as char);
     start_replica_threads(tx_status, receivers, &transmitters, drop_prob);
     thread::spawn(move || {
         process_status_messages(rx_status, num_replicas);
@@ -84,28 +88,7 @@ fn process_status_messages(rx_status: Receiver<ReplicaStatus>, num_replicas: usi
                 esc = 27 as char,
                 output = output
             );
-            println!(
-                "{}",
-                format!(
-                    "{}, {}, {}, {}, {}.",
-                    "Leaders are cyan".cyan(),
-                    "Candidates are blue".blue(),
-                    "Followers are magenta".magenta(),
-                    "Deads are red".red(),
-                    "Disconnected replicas are yellow".yellow()
-                )
-                .bold()
-            );
-            println!(
-                "{}",
-                format!(
-                    "{}, {}, {}.",
-                    "Applied logs are green".green(),
-                    "Committed not yet applied logs are magenta".magenta(),
-                    "Appended unprocessed logs are yellow".yellow()
-                )
-                .bold()
-            );
+
             statuses = BTreeMap::new();
         }
     }

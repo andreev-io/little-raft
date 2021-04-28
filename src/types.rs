@@ -63,12 +63,16 @@ pub enum Message {
 pub struct Peer {
     pub id: usize,
     tx: Sender<Message>,
-    drop_prob: usize
+    drop_prob: usize,
 }
 
 impl Peer {
     pub fn new(id: usize, tx: Sender<Message>, percent_probability_message_drop: usize) -> Peer {
-        Peer { id: id, tx: tx, drop_prob: percent_probability_message_drop }
+        Peer {
+            id: id,
+            tx: tx,
+            drop_prob: percent_probability_message_drop,
+        }
     }
 
     pub fn send(&self, message: Message) {
