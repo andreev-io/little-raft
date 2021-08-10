@@ -1,16 +1,13 @@
 extern crate clap;
-
-mod replicas;
-mod types;
+use simple_raft::replica::{ControlMessage, Message, ReplicaStatus, State, Replica};
+use simple_raft::peer::Peer;
 
 use clap::{App, Arg};
 
 use colored::*;
 use crossbeam::channel::{Receiver, Sender};
 use crossbeam_channel::unbounded;
-use replicas::Replica;
 use std::{collections::BTreeMap, fs, thread, time::Duration};
-use types::{ControlMessage, Message, Peer, ReplicaStatus, State};
 
 type PeerSenderProto = (usize, Sender<Message>, Sender<ControlMessage>);
 type PeerReceiverProto = (usize, Receiver<Message>, Receiver<ControlMessage>);
