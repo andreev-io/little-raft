@@ -1,4 +1,4 @@
-use crate::types::{ControlMessage, HeartbeatTimer, Log, Message, Peer, ReplicaStatus, State};
+use crate::heartbeat_timer::HeartbeatTimer;
 use crossbeam::channel::{Receiver, Sender};
 use crossbeam_channel::Select;
 use rand::Rng;
@@ -6,10 +6,75 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
 };
+use crate::peer::Peer;
 
 const HEARTBEAT_TIMEOUT: u64 = 1000;
 const ELECTION_MIN_TIMEOUT: u64 = 2500;
 const ELECTION_MAX_TIMEOUT: u64 = 3500;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum State {
+    Follower,
+    Candidate,
+    Leader,
+    Dead,
+}
+
+#[derive(Debug, Clone)]
+pub struct Log {
+    pub index: usize,
+    pub delta: i32,
+    pub term: usize,
+}
+
+pub enum ControlMessage {
+    Up,
+    Down,
+    Apply(i32),
+    Disconnect,
+    Connect,
+}
+
+#[derive(Debug)]
+pub struct ReplicaStatus {
+    pub id: usize,
+    pub state: State,
+    pub connected: bool,
+    pub value: i32,
+    pub term: usize,
+    pub commit_index: usize,
+    pub last_applied: usize,
+    pub log: Vec<Log>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Message {
+    AppendEntryRequest {
+        from_id: usize,
+        term: usize,
+        prev_log_index: usize,
+        prev_log_term: usize,
+        entries: Vec<Log>,
+        commit_index: usize,
+    },
+    AppendEntryResponse {
+        from_id: usize,
+        term: usize,
+        success: bool,
+        last_index: usize,
+    },
+    RequestVoteRequest {
+        from_id: usize,
+        term: usize,
+        last_log_index: usize,
+        last_log_term: usize,
+    },
+    RequestVoteResponse {
+        from_id: usize,
+        term: usize,
+        vote_granted: bool,
+    },
+}
 
 pub struct Replica {
     // Whether the replica can send & receive messages.
@@ -579,3 +644,4 @@ impl Replica {
         });
     }
 }
+
