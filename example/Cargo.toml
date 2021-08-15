@@ -12,4 +12,4 @@ crossbeam = "0.8.0"
 time = "0.1.39"
 colored = "2"
 clap = "2.33.3"
-simple_raft = { path = "../simple_raft" }
+little_raft = { path = "../little_raft" }

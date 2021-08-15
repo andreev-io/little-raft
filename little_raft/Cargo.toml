@@ -1,5 +1,5 @@
 [package]
-name = "simple_raft"
+name = "little_raft"
 version = "0.1.0"
 authors = ["ilya <ilyaandreev2010@gmail.com>"]
 edition = "2018"

@@ -1,4 +1,4 @@
-use simple_raft::{
+use little_raft::{
     cluster::Cluster, message::Message, replica::Replica, state_machine::StateMachine,
 };
 use std::{

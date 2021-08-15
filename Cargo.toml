@@ -1,5 +1,5 @@
 [workspace]
 members = [
     "example",
-    "simple_raft"
+    "little_raft"
 ]

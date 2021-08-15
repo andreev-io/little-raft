@@ -153,7 +153,7 @@ dependencies = [
  "colored",
  "crossbeam",
  "crossbeam-channel",
- "simple_raft",
+ "little_raft",
  "time",
 ]
 
@@ -188,6 +188,17 @@ name = "libc"
 version = "0.2.93"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9385f66bf6105b241aa65a61cb923ef20efc665cb9f9bb50ac2f0c4b7f378d41"
+
+[[package]]
+name = "little_raft"
+version = "0.1.0"
+dependencies = [
+ "crossbeam",
+ "crossbeam-channel",
+ "rand",
+ "time",
+ "timer",
+]
 
 [[package]]
 name = "memoffset"
@@ -290,17 +301,6 @@ name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d29ab0c6d3fc0ee92fe66e2d99f700eab17a8d57d1c1d3b748380fb20baa78cd"
-
-[[package]]
-name = "simple_raft"
-version = "0.1.0"
-dependencies = [
- "crossbeam",
- "crossbeam-channel",
- "rand",
- "time",
- "timer",
-]
 
 [[package]]
 name = "strsim"
