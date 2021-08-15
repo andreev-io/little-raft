@@ -1,8 +1,9 @@
-use std::{thread, time::Duration};
 use crossbeam::channel::{bounded, Receiver};
+use std::{thread, time::Duration};
 
+#[derive(Debug)]
 pub struct HeartbeatTimer {
-    timeout: Duration,
+    pub timeout: Duration,
     rx: Receiver<()>,
 }
 

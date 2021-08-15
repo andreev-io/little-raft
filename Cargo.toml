@@ -1,5 +1,5 @@
 [workspace]
 members = [
-    "cli",
+    "example",
     "simple_raft"
 ]
