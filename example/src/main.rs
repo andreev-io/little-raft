@@ -1,5 +1,8 @@
 use little_raft::{
-    cluster::Cluster, message::Message, replica::Replica, state_machine::StateMachine,
+    cluster::Cluster,
+    message::Message,
+    replica::Replica,
+    state_machine::{StateMachine, StateMachineTransition},
 };
 use std::{
     collections::BTreeMap,
@@ -13,28 +16,36 @@ const ELECTION_MIN_TIMEOUT: u64 = 2500;
 const ELECTION_MAX_TIMEOUT: u64 = 3500;
 
 #[derive(Clone, Copy)]
-struct MathAction {
+struct ArithmeticalTransition {
     delta: i32,
+    id: usize,
+}
+
+impl StateMachineTransition for ArithmeticalTransition {
+    type TransitionID = usize;
+    fn get_id(&self) -> Self::TransitionID {
+        self.id
+    }
 }
 
 struct Calculator {
     value: i32,
 }
 
-impl StateMachine<MathAction> for Calculator {
-    fn apply_action(&mut self, action: MathAction) {
-        self.value += action.delta;
+impl StateMachine<ArithmeticalTransition> for Calculator {
+    fn apply_transition(&mut self, transition: ArithmeticalTransition) {
+        self.value += transition.delta;
     }
 }
 
 struct MyCluster {
-    receiver: Receiver<Message<MathAction>>,
-    transmitters: BTreeMap<usize, Sender<Message<MathAction>>>,
-    tasks: Receiver<MathAction>,
+    receiver: Receiver<Message<ArithmeticalTransition>>,
+    transmitters: BTreeMap<usize, Sender<Message<ArithmeticalTransition>>>,
+    tasks: Receiver<ArithmeticalTransition>,
 }
 
-impl Cluster<MathAction> for MyCluster {
-    fn send(&self, to_id: usize, message: Message<MathAction>) {
+impl Cluster<ArithmeticalTransition> for MyCluster {
+    fn send(&self, to_id: usize, message: Message<ArithmeticalTransition>) {
         if let Some(transmitter) = self.transmitters.get(&to_id) {
             match transmitter.send(message) {
                 Ok(_) => {}
@@ -43,14 +54,17 @@ impl Cluster<MathAction> for MyCluster {
         }
     }
 
-    fn receive_timeout(&self, timeout: std::time::Duration) -> Option<Message<MathAction>> {
+    fn receive_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Option<Message<ArithmeticalTransition>> {
         match self.receiver.recv_timeout(timeout) {
             Ok(t) => Some(t),
             Err(_) => None,
         }
     }
 
-    fn get_actions(&self) -> Vec<MathAction> {
+    fn get_transitions(&self) -> Vec<ArithmeticalTransition> {
         match self.tasks.try_recv() {
             Ok(t) => vec![t; 1],
             Err(_) => vec![],
@@ -66,7 +80,7 @@ fn main() {
     let mut transmitters = BTreeMap::new();
     let mut receivers = BTreeMap::new();
     for i in 0..=2 {
-        let (tx, rx) = channel::<Message<MathAction>>();
+        let (tx, rx) = channel::<Message<ArithmeticalTransition>>();
         transmitters.insert(i, tx);
         receivers.insert(i, rx);
     }
@@ -77,7 +91,7 @@ fn main() {
     let mut clusters = BTreeMap::new();
     let mut task_transmitters = BTreeMap::new();
     for i in 0..=2 {
-        let (task_tx, task_rx) = channel::<MathAction>();
+        let (task_tx, task_rx) = channel::<ArithmeticalTransition>();
         task_transmitters.insert(i, task_tx);
         clusters.insert(
             i,
@@ -98,7 +112,7 @@ fn main() {
                 peer_ids,
                 Box::new(cluster),
                 Box::new(Calculator { value: 0 }),
-                MathAction { delta: 0 },
+                ArithmeticalTransition { delta: 0, id: 0 },
             )
             .start(
                 ELECTION_MIN_TIMEOUT,
@@ -120,8 +134,9 @@ fn parse_control_line(s: &str) -> (usize, String) {
 }
 
 // This function blocks forever.
-fn process_control_messages(transmitters: BTreeMap<usize, Sender<MathAction>>) {
+fn process_control_messages(transmitters: BTreeMap<usize, Sender<ArithmeticalTransition>>) {
     let mut next_unprocessed_line: usize = 0;
+    let mut cur_id = 1;
     loop {
         let buffer = match fs::read_to_string("input.txt") {
             Ok(buf) => buf,
@@ -155,10 +170,14 @@ fn process_control_messages(transmitters: BTreeMap<usize, Sender<MathAction>>) {
                     transmitters
                         .get(&id)
                         .unwrap()
-                        .send(MathAction { delta: delta })
+                        .send(ArithmeticalTransition {
+                            delta: delta,
+                            id: cur_id,
+                        })
                         .unwrap_or_else(|error| {
                             println!("{}", error);
                         });
+                    cur_id += 1;
                 }
                 _ => {}
             };
