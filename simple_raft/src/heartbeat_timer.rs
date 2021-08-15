@@ -1,11 +1,12 @@
-use std::{thread, time::Duration};
 use crossbeam::channel::{bounded, Receiver};
+use std::{thread, time::Duration};
 
 pub struct HeartbeatTimer {
     timeout: Duration,
     rx: Receiver<()>,
 }
 
+// HeartbeatTimer fires after the specified duration. The timer can be renewed.
 impl HeartbeatTimer {
     pub fn new(timeout: Duration) -> HeartbeatTimer {
         let (tx, rx) = bounded(1);
