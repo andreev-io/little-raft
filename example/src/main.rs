@@ -1,110 +1,110 @@
-extern crate clap;
-use simple_raft::cluster::Cluster;
-use simple_raft::message::Message;
-use simple_raft::replica::Replica;
-use simple_raft::state_machine::StateMachine;
-use std::collections::BTreeMap;
-use std::sync::mpsc::channel;
-use std::{fs, sync::mpsc, thread};
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-struct CountingMachine {
-    value: i32,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-struct ALU {
-    delta: i32,
-}
+use simple_raft::{
+    cluster::Cluster, message::Message, replica::Replica, state_machine::StateMachine,
+};
+use std::{
+    collections::BTreeMap,
+    fs,
+    sync::mpsc::{channel, Receiver, Sender},
+    thread,
+};
 
 const HEARTBEAT_TIMEOUT: u64 = 1000;
-
 const ELECTION_MIN_TIMEOUT: u64 = 2500;
 const ELECTION_MAX_TIMEOUT: u64 = 3500;
 
-impl StateMachine<ALU> for CountingMachine {
-    fn new() -> CountingMachine {
-        return CountingMachine { value: 0 };
-    }
+#[derive(Clone, Copy)]
+struct MathAction {
+    delta: i32,
+}
 
-    fn apply_action(&mut self, action: ALU) {
+struct Calculator {
+    value: i32,
+}
+
+impl StateMachine<MathAction> for Calculator {
+    fn apply_action(&mut self, action: MathAction) {
         self.value += action.delta;
     }
 }
 
-#[derive(Debug)]
 struct MyCluster {
-    self_id: usize,
-    receiver: mpsc::Receiver<Message<ALU>>,
-    transmitters: BTreeMap<usize, mpsc::Sender<Message<ALU>>>,
-    tasks: mpsc::Receiver<ALU>,
+    receiver: Receiver<Message<MathAction>>,
+    transmitters: BTreeMap<usize, Sender<Message<MathAction>>>,
+    tasks: Receiver<MathAction>,
 }
 
-impl Cluster<ALU> for MyCluster {
-    fn send(&self, to_id: usize, message: Message<ALU>) {
+impl Cluster<MathAction> for MyCluster {
+    fn send(&self, to_id: usize, message: Message<MathAction>) {
         if let Some(transmitter) = self.transmitters.get(&to_id) {
             match transmitter.send(message) {
                 Ok(_) => {}
-                Err(t) => {
-                    println!("{:?}", t);
-                }
+                Err(t) => println!("{}", t),
             }
         }
     }
 
-    fn receive_timeout(&self, timeout: std::time::Duration) -> Option<Message<ALU>> {
+    fn receive_timeout(&self, timeout: std::time::Duration) -> Option<Message<MathAction>> {
         match self.receiver.recv_timeout(timeout) {
             Ok(t) => Some(t),
             Err(_) => None,
         }
     }
 
-    fn get_action(&self) -> Option<ALU> {
+    fn get_actions(&self) -> Vec<MathAction> {
         match self.tasks.try_recv() {
-            Ok(t) => Some(t),
-            Err(_) => None,
+            Ok(t) => vec![t; 1],
+            Err(_) => vec![],
         }
     }
 }
 
+// Start a simple cluster with 3 replicas. The distributed state machine
+// maintains a number that a user can add to or subtract from.
 fn main() {
+    // Create transmitter and receivers that replicas will be communicating
+    // through. In these example, replicas communicate over mspc channels.
     let mut transmitters = BTreeMap::new();
     let mut receivers = BTreeMap::new();
     for i in 0..=2 {
-        let (tx, rx) = channel::<Message<ALU>>();
+        let (tx, rx) = channel::<Message<MathAction>>();
         transmitters.insert(i, tx);
         receivers.insert(i, rx);
     }
 
+    // Create a cluster abstraction and an mspc channel for each of the
+    // replicas. The channel is used to send mathematical operations for the
+    // cluster to process to replicas.
     let mut clusters = BTreeMap::new();
     let mut task_transmitters = BTreeMap::new();
     for i in 0..=2 {
-        let (task_tx, task_rx) = channel::<ALU>();
+        let (task_tx, task_rx) = channel::<MathAction>();
         task_transmitters.insert(i, task_tx);
         clusters.insert(
             i,
             MyCluster {
                 receiver: receivers.remove(&i).unwrap(),
                 transmitters: transmitters.clone(),
-                self_id: i,
                 tasks: task_rx,
             },
         );
     }
 
-    for i in (0..clusters.len()).rev() {
+    for i in (0..2).rev() {
         let cluster = clusters.remove(&i).unwrap();
         let peer_ids = transmitters.keys().cloned().filter(|id| id != &i).collect();
         thread::spawn(move || {
-            let mut r = Replica::new(
+            Replica::new(
                 i,
                 peer_ids,
                 Box::new(cluster),
-                Box::new(CountingMachine { value: 0 }),
-                ALU { delta: 0 },
+                Box::new(Calculator { value: 0 }),
+                MathAction { delta: 0 },
+            )
+            .start(
+                ELECTION_MIN_TIMEOUT,
+                ELECTION_MAX_TIMEOUT,
                 std::time::Duration::from_millis(HEARTBEAT_TIMEOUT),
             );
-            r.start(ELECTION_MIN_TIMEOUT, ELECTION_MAX_TIMEOUT);
         });
     }
 
@@ -120,7 +120,7 @@ fn parse_control_line(s: &str) -> (usize, String) {
 }
 
 // This function blocks forever.
-fn process_control_messages(transmitters: BTreeMap<usize, mpsc::Sender<ALU>>) {
+fn process_control_messages(transmitters: BTreeMap<usize, Sender<MathAction>>) {
     let mut next_unprocessed_line: usize = 0;
     loop {
         let buffer = match fs::read_to_string("input.txt") {
@@ -150,9 +150,15 @@ fn process_control_messages(transmitters: BTreeMap<usize, mpsc::Sender<ALU>>) {
             };
 
             println!("Action for {:?} with delta {:?}", id, delta);
-            let message = match command.as_str() {
+            match command.as_str() {
                 "Apply" => {
-                    transmitters.get(&id).unwrap().send(ALU { delta: delta });
+                    transmitters
+                        .get(&id)
+                        .unwrap()
+                        .send(MathAction { delta: delta })
+                        .unwrap_or_else(|error| {
+                            println!("{}", error);
+                        });
                 }
                 _ => {}
             };
