@@ -1,8 +1,8 @@
 use crate::{
     cluster::Cluster,
     heartbeat_timer::HeartbeatTimer,
-    message::{Entry, EntryState, Message},
-    state_machine::{StateMachine, StateMachineTransition},
+    message::{Entry, Message},
+    state_machine::{StateMachine, StateMachineTransition, TransitionState},
 };
 use rand::Rng;
 use std::{
@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum State {
     Follower,
     Candidate,
@@ -92,7 +92,6 @@ where
                 term: 0,
                 index: 0,
                 transition: noop_transition,
-                state: EntryState::Queued,
             }],
             noop_transition: noop_transition,
             commit_index: 0,
@@ -124,47 +123,6 @@ where
         );
     }
 
-    // Check if the replica is the current Leader. If yes, the Result is Ok. If
-    // not, the result if Err with the ID of the current Leader, if it's known.
-    pub fn is_leader(&self) -> Result<(), Option<ReplicaID>> {
-        match self.state {
-            State::Leader => Ok(()),
-            _ => {
-                if let Some(leader_id) = self.leader_id {
-                    Err(Some(leader_id))
-                } else {
-                    Err(None)
-                }
-            }
-        }
-    }
-
-    pub fn get_transition_status(&self, transition_id: T::TransitionID) -> Result<EntryState, ()> {
-        if let Some(entry) = self
-            .entries
-            .iter()
-            .find(|entry| entry.transition.get_id() == transition_id)
-        {
-            Ok(entry.state)
-        } else {
-            Err(())
-        }
-    }
-
-    pub fn get_last_transition_statuses(&self, mut n: usize) -> Vec<(T::TransitionID, EntryState)> {
-        let mut results = Vec::new();
-        while n > 0 && n <= self.entries.len() {
-            let index = self.entries.len() - n;
-            let id = self.entries[index].transition.get_id();
-            let state = self.entries[index].state;
-            results.push((id, state));
-
-            n -= 1;
-        }
-
-        results
-    }
-
     fn broadcast_message<F>(&self, message_generator: F)
     where
         F: Fn(usize) -> Message<T>,
@@ -193,7 +151,6 @@ where
 
             self.apply_ready_entries();
             self.load_new_entries();
-            std::thread::sleep(std::time::Duration::from_millis(5000));
         }
     }
 
@@ -243,6 +200,7 @@ where
         // replicated on the majority of the replicas.
         if self.state == State::Leader && self.commit_index < self.entries.len() - 1 {
             let mut n = self.entries.len() - 1;
+            let old_commit_index = self.commit_index;
             while n > self.commit_index {
                 let num_replications =
                     self.match_index.iter().fold(
@@ -258,18 +216,11 @@ where
                 n -= 1;
             }
 
-            let mut last_committed = self.commit_index;
-            loop {
-                match self.entries[last_committed].state {
-                    EntryState::Queued => {
-                        self.entries[last_committed].state = EntryState::Committed;
-                        if last_committed == 0 {
-                            break;
-                        }
-                        last_committed -= 1;
-                    }
-                    _ => break,
-                }
+            for i in old_commit_index + 1..=self.commit_index {
+                self.state_machine.register_transition_state(
+                    self.entries[i].transition.get_id(),
+                    TransitionState::Committed,
+                );
             }
         }
 
@@ -278,19 +229,24 @@ where
             self.last_applied += 1;
             self.state_machine
                 .apply_transition(self.entries[self.last_applied].transition);
-            self.entries[self.last_applied].state = EntryState::Applied;
+            self.state_machine.register_transition_state(
+                self.entries[self.last_applied].transition.get_id(),
+                TransitionState::Applied,
+            );
         }
     }
 
     fn load_new_entries(&mut self) {
-        for transition in self.cluster.get_transitions().iter() {
+        for transition in self.cluster.get_pending_transitions().iter() {
             if self.state == State::Leader {
                 self.entries.push(Entry {
                     index: self.entries.len(),
                     transition: *transition,
                     term: self.current_term,
-                    state: EntryState::Queued,
                 });
+
+                self.state_machine
+                    .register_transition_state(transition.get_id(), TransitionState::Queued);
             }
         }
     }
@@ -371,6 +327,21 @@ where
         }
     }
 
+    fn register_leader(&mut self, leader_id: usize) {
+        match self.leader_id {
+            Some(cur_leader_id) => {
+                if cur_leader_id != leader_id {
+                    self.leader_id = Some(leader_id);
+                    self.cluster.register_leader_change(Some(leader_id));
+                }
+            }
+            None => {
+                self.leader_id = Some(leader_id);
+                self.cluster.register_leader_change(Some(leader_id));
+            }
+        }
+    }
+
     fn process_append_entry_request_as_follower(
         &mut self,
         from_id: ReplicaID,
@@ -380,7 +351,7 @@ where
         entries: Vec<Entry<T>>,
         commit_index: usize,
     ) {
-        self.leader_id = Some(from_id);
+        self.register_leader(from_id);
 
         // Check that the leader's term is at least as large as ours.
         if self.current_term > term {
@@ -534,7 +505,7 @@ where
         from_id: ReplicaID,
         message: Message<T>,
     ) {
-        self.leader_id = Some(from_id);
+        self.register_leader(from_id);
 
         if term >= self.current_term {
             self.become_follower(term);
@@ -553,7 +524,7 @@ where
     }
 
     fn become_leader(&mut self) {
-        self.leader_id = Some(self.id);
+        self.register_leader(self.id);
         self.state = State::Leader;
         self.current_votes = None;
         self.voted_for = None;
@@ -574,7 +545,6 @@ where
             index: self.entries.len(),
             transition: self.noop_transition,
             term: self.current_term,
-            state: EntryState::Queued,
         });
     }
 

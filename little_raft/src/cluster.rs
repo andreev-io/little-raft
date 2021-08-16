@@ -18,5 +18,6 @@ where
     // distributed state machine needs to replicate and apply. All replicas poll
     // this function periodically but only Leaders merit the return value.
     // Non-Leaders ignore the return value of get_action.
-    fn get_transitions(&self) -> Vec<T>;
+    fn get_pending_transitions(&self) -> Vec<T>;
+    fn register_leader_change(&mut self, leader_id: Option<usize>);
 }

@@ -4,7 +4,7 @@ use crate::state_machine::StateMachineTransition;
 // Entry describes a user-defined transition of the distributed state machine.
 // It has some associated metadata, namely the term when the entry was created
 // and its index in the log.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Entry<T>
 where
     T: StateMachineTransition,
@@ -12,24 +12,11 @@ where
     pub transition: T,
     pub index: usize,
     pub term: usize,
-    pub state: EntryState,
-}
-
-// State of a particular entry.
-#[derive(Clone, Copy)]
-pub enum EntryState {
-    // Entry being queued means that the replica is aware of it and is
-    // replicating it across the cluster.
-    Queued,
-    // Entry being committed means that the entry is guaranteed to be in the log
-    // of all future leaders in the cluster.
-    Committed,
-    // Entry being applied means that it has been applied to the state machine.
-    Applied,
 }
 
 // Message describes messages that the replicas pass between each other to
 // achieve consensus on the distributed state machine.
+#[derive(Debug)]
 pub enum Message<T>
 where
     T: StateMachineTransition,
