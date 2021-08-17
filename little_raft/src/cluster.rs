@@ -19,4 +19,6 @@ where
     fn get_pending_transitions(&mut self) -> Vec<T>;
 
     fn halt(&self) -> bool;
+
+    fn register_leader(&mut self, leader_id: Option<usize>);
 }

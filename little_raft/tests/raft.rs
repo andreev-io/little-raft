@@ -1,5 +1,5 @@
 use crossbeam_channel as channel;
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{unbounded, Sender};
 use little_raft::{
     cluster::Cluster,
     message::Message,
@@ -56,9 +56,23 @@ struct MyCluster {
     pending_transitions: Vec<ArithmeticOperation>,
     pending_messages: Vec<Message<ArithmeticOperation>>,
     halt: bool,
+    leader: bool,
+    id: usize,
 }
 
 impl Cluster<ArithmeticOperation> for MyCluster {
+    fn register_leader(&mut self, leader_id: Option<usize>) {
+        if let Some(id) = leader_id {
+            if id == self.id {
+                self.leader = true;
+            } else {
+                self.leader = false;
+            }
+        } else {
+            self.leader = false;
+        }
+    }
+
     fn send(&mut self, to_id: usize, message: Message<ArithmeticOperation>) {
         if let Some(transmitter) = self.transmitters.get(&to_id) {
             match transmitter.send(message) {
@@ -103,6 +117,8 @@ fn run_replicas() {
             pending_transitions: Vec::new(),
             pending_messages: Vec::new(),
             halt: false,
+            leader: false,
+            id: i,
         }));
         clusters.push((cluster.clone(), receivers.remove(&i).unwrap()));
 
@@ -152,49 +168,86 @@ fn run_replicas() {
         });
     }
 
-    thread::sleep(Duration::from_secs(5));
-    for (cluster, _) in clusters.into_iter() {
+    thread::sleep(Duration::from_secs(2));
+    for (i, (cluster, _)) in clusters.iter().enumerate() {
+        let mut c = cluster.lock().unwrap();
+        if c.leader {
+            c.pending_transitions
+                .push(ArithmeticOperation { delta: 5, id: 1 });
+            let _ = notifiers[i].1.send(());
+            break;
+        }
+    }
+
+    thread::sleep(Duration::from_secs(2));
+    for (i, (cluster, _)) in clusters.iter().enumerate() {
+        let mut c = cluster.lock().unwrap();
+        if c.leader {
+            c.pending_transitions
+                .push(ArithmeticOperation { delta: -51, id: 2 });
+            let _ = notifiers[i].1.send(());
+            break;
+        }
+    }
+
+    thread::sleep(Duration::from_secs(2));
+    for (i, (cluster, _)) in clusters.iter().enumerate() {
+        let mut c = cluster.lock().unwrap();
+        if c.leader {
+            c.pending_transitions
+                .push(ArithmeticOperation { delta: -511, id: 3 });
+            let _ = notifiers[i].1.send(());
+            break;
+        }
+    }
+
+    thread::sleep(Duration::from_secs(2));
+    for (i, (cluster, _)) in clusters.iter().enumerate() {
+        let mut c = cluster.lock().unwrap();
+        if c.leader {
+            c.pending_transitions
+                .push(ArithmeticOperation { delta: 3, id: 4 });
+            let _ = notifiers[i].1.send(());
+            break;
+        }
+    }
+
+    thread::sleep(Duration::from_secs(2));
+    for (cluster, _) in clusters.iter() {
         let mut c = cluster.lock().unwrap();
         c.halt = true;
     }
+    thread::sleep(Duration::from_secs(5));
 
-    thread::sleep(Duration::from_secs(1));
-    // thread::sleep(std::time::Duration::from_secs(2));
-    // task_tx.send(ArithmeticOperation { delta: 5, id: 1 })?;
-    // task_tx.send(ArithmeticOperation { delta: -51, id: 2 })?;
-    // task_tx.send(ArithmeticOperation { delta: -511, id: 3 })?;
-    // task_tx.send(ArithmeticOperation { delta: 3, id: 4 })?;
-    // thread::sleep(std::time::Duration::from_secs(2));
+    let applied_transactions: Vec<(usize, usize)> = applied_rx.try_iter().collect();
+    let expected_vec: Vec<usize> = vec![0, 1, 2, 3, 4];
+    assert_eq!(
+        expected_vec,
+        applied_transactions.iter().fold(Vec::new(), |mut acc, x| {
+            if x.0 == 0 {
+                acc.push(x.1);
+            };
+            acc
+        })
+    );
 
-    // let applied_transactions: Vec<(usize, usize)> = applied_rx.try_iter().collect();
-    // let expected_vec: Vec<usize> = vec![0, 1, 2, 3, 4];
-    // assert_eq!(
-    //     expected_vec,
-    //     applied_transactions.iter().fold(Vec::new(), |mut acc, x| {
-    //         if x.0 == 0 {
-    //             acc.push(x.1);
-    //         };
-    //         acc
-    //     })
-    // );
+    assert_eq!(
+        expected_vec,
+        applied_transactions.iter().fold(Vec::new(), |mut acc, x| {
+            if x.0 == 1 {
+                acc.push(x.1);
+            };
+            acc
+        })
+    );
 
-    // assert_eq!(
-    //     expected_vec,
-    //     applied_transactions.iter().fold(Vec::new(), |mut acc, x| {
-    //         if x.0 == 1 {
-    //             acc.push(x.1);
-    //         };
-    //         acc
-    //     })
-    // );
-
-    // assert_eq!(
-    //     expected_vec,
-    //     applied_transactions.iter().fold(Vec::new(), |mut acc, x| {
-    //         if x.0 == 2 {
-    //             acc.push(x.1);
-    //         };
-    //         acc
-    //     })
-    // );
+    assert_eq!(
+        expected_vec,
+        applied_transactions.iter().fold(Vec::new(), |mut acc, x| {
+            if x.0 == 2 {
+                acc.push(x.1);
+            };
+            acc
+        })
+    );
 }

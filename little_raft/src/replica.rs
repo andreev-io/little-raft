@@ -287,6 +287,7 @@ where
     fn load_new_entries(&mut self) {
         for transition in self.cluster.lock().unwrap().get_pending_transitions() {
             if self.state == State::Leader {
+                // panic!("got a transition am a leader");
                 self.entries.push(Entry {
                     index: self.entries.len(),
                     transition: transition,
@@ -296,6 +297,8 @@ where
                 let mut state_machine = self.state_machine.lock().unwrap();
                 state_machine
                     .register_transition_state(transition.get_id(), TransitionState::Queued);
+            } else {
+                // panic!("got a transition but am not a leader");
             }
         }
     }
@@ -309,6 +312,7 @@ where
                 last_index,
             } => {
                 if term > self.current_term {
+                    self.cluster.lock().unwrap().register_leader(Some(from_id));
                     self.become_follower(term);
                 } else if success {
                     self.next_index.insert(from_id, last_index + 1);
@@ -339,6 +343,7 @@ where
                 },
             );
         } else if self.current_term < term {
+            self.cluster.lock().unwrap().register_leader(Some(from_id));
             self.become_follower(term);
         }
 
@@ -346,6 +351,7 @@ where
             if self.entries[self.entries.len() - 1].index <= last_log_index
                 && self.entries[self.entries.len() - 1].term <= last_log_term
             {
+                self.cluster.lock().unwrap().register_leader(Some(from_id));
                 self.cluster.lock().unwrap().send(
                     from_id,
                     Message::VoteResponse {
@@ -434,6 +440,7 @@ where
             }
         }
 
+        self.cluster.lock().unwrap().register_leader(Some(from_id));
         self.cluster.lock().unwrap().send(
             from_id,
             Message::AppendEntryResponse {
@@ -499,6 +506,7 @@ where
         vote_granted: bool,
     ) {
         if term > self.current_term {
+            self.cluster.lock().unwrap().register_leader(Some(from_id));
             self.become_follower(term);
         } else if vote_granted {
             if let Some(cur_votes) = &mut self.current_votes {
@@ -517,6 +525,7 @@ where
         message: Message<T>,
     ) {
         if term > self.current_term {
+            self.cluster.lock().unwrap().register_leader(Some(from_id));
             self.become_follower(term);
             self.process_message_as_follower(message);
         } else {
@@ -538,6 +547,7 @@ where
         message: Message<T>,
     ) {
         if term >= self.current_term {
+            self.cluster.lock().unwrap().register_leader(Some(from_id));
             self.become_follower(term);
             self.process_message_as_follower(message);
         } else {
@@ -554,6 +564,7 @@ where
     }
 
     fn become_leader(&mut self) {
+        self.cluster.lock().unwrap().register_leader(Some(self.id));
         self.state = State::Leader;
         self.current_votes = None;
         self.voted_for = None;
