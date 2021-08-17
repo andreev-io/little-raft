@@ -4,7 +4,7 @@ use crate::state_machine::StateMachineTransition;
 // Entry describes a user-defined transition of the distributed state machine.
 // It has some associated metadata, namely the term when the entry was created
 // and its index in the log.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd)]
 pub struct Entry<T>
 where
     T: StateMachineTransition,
@@ -16,7 +16,7 @@ where
 
 // Message describes messages that the replicas pass between each other to
 // achieve consensus on the distributed state machine.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 pub enum Message<T>
 where
     T: StateMachineTransition,
