@@ -1,22 +1,21 @@
 use crossbeam::channel::{bounded, Receiver};
 use std::{thread, time::Duration};
 
-pub struct HeartbeatTimer {
-    timeout: Duration,
+pub struct Timer {
     rx: Receiver<()>,
+    timeout: Duration,
 }
 
-// HeartbeatTimer fires after the specified duration. The timer can be renewed.
-impl HeartbeatTimer {
-    pub fn new(timeout: Duration) -> HeartbeatTimer {
+// Timer fires after the specified duration. The timer can be renewed.
+impl Timer {
+    pub fn new(timeout: Duration) -> Timer {
         let (tx, rx) = bounded(1);
-
         thread::spawn(move || {
             thread::sleep(timeout);
-            tx.send(()).unwrap();
+            let _ = tx.send(());
         });
 
-        HeartbeatTimer {
+        Timer {
             timeout: timeout,
             rx: rx,
         }
@@ -27,16 +26,13 @@ impl HeartbeatTimer {
         let timeout = self.timeout;
         thread::spawn(move || {
             thread::sleep(timeout);
-            tx.send(()).unwrap();
+            let _ = tx.send(());
         });
 
         self.rx = rx;
     }
 
-    pub fn fired(&mut self) -> bool {
-        match self.rx.try_recv() {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+    pub fn get_rx(&self) -> &Receiver<()> {
+        &self.rx
     }
 }
