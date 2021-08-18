@@ -1,8 +1,15 @@
 [package]
+description = "The lightest distributed consensus library. Run your own replicated state machine!"
 name = "little_raft"
-version = "0.1.0"
-authors = ["ilya <ilyaandreev2010@gmail.com>"]
+version = "0.1.2"
+authors = ["Ilya Andreev <iandre3@illinois.edu>"]
 edition = "2018"
+license = "MIT"
+homepage = "https://github.com/andreev-io/little-raft"
+repository = "https://github.com/andreev-io/little-raft"
+readme = "../README.md"
+keywords = ["distributed-systems", "raft", "consensus"]
+categories = ["concurrency", "database", "database-implementations"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

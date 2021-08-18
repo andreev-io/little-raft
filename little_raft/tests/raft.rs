@@ -31,6 +31,7 @@ struct Calculator {
     id: usize,
     value: i32,
     applied_ids_tx: Sender<(usize, usize)>,
+    pending_transitions: Vec<ArithmeticOperation>,
 }
 
 impl StateMachine<ArithmeticOperation> for Calculator {
@@ -49,11 +50,16 @@ impl StateMachine<ArithmeticOperation> for Calculator {
                 .expect("could not send applied transition id");
         }
     }
+
+    fn get_pending_transitions(&mut self) -> Vec<ArithmeticOperation> {
+        let cur = self.pending_transitions.clone();
+        self.pending_transitions = Vec::new();
+        cur
+    }
 }
 
 struct MyCluster {
     transmitters: BTreeMap<usize, Sender<Message<ArithmeticOperation>>>,
-    pending_transitions: Vec<ArithmeticOperation>,
     pending_messages: Vec<Message<ArithmeticOperation>>,
     halt: bool,
     leader: bool,
@@ -73,7 +79,7 @@ impl Cluster<ArithmeticOperation> for MyCluster {
         }
     }
 
-    fn send(&mut self, to_id: usize, message: Message<ArithmeticOperation>) {
+    fn send_message(&mut self, to_id: usize, message: Message<ArithmeticOperation>) {
         if let Some(transmitter) = self.transmitters.get(&to_id) {
             match transmitter.send(message) {
                 Ok(_) => {}
@@ -86,15 +92,9 @@ impl Cluster<ArithmeticOperation> for MyCluster {
         self.halt
     }
 
-    fn receive(&mut self) -> Vec<Message<ArithmeticOperation>> {
+    fn receive_messages(&mut self) -> Vec<Message<ArithmeticOperation>> {
         let cur = self.pending_messages.clone();
         self.pending_messages = Vec::new();
-        cur
-    }
-
-    fn get_pending_transitions(&mut self) -> Vec<ArithmeticOperation> {
-        let cur = self.pending_transitions.clone();
-        self.pending_transitions = Vec::new();
         cur
     }
 }
@@ -114,7 +114,6 @@ fn run_replicas() {
         // Create the cluster.
         let cluster = Arc::new(Mutex::new(MyCluster {
             transmitters: transmitters.clone(),
-            pending_transitions: Vec::new(),
             pending_messages: Vec::new(),
             halt: false,
             leader: false,
@@ -135,6 +134,7 @@ fn run_replicas() {
         let state_machine = Arc::new(Mutex::new(Calculator {
             id: i,
             value: 0,
+            pending_transitions: Vec::new(),
             applied_ids_tx: new_applied_tx,
         }));
 
@@ -168,46 +168,74 @@ fn run_replicas() {
         });
     }
 
-    thread::sleep(Duration::from_secs(2));
+    thread::sleep(Duration::from_secs(3));
     for (i, (cluster, _)) in clusters.iter().enumerate() {
-        let mut c = cluster.lock().unwrap();
-        if c.leader {
-            c.pending_transitions
+        let mut leader_id = None;
+        if cluster.lock().unwrap().leader {
+            leader_id = Some(i);
+        }
+
+        if let Some(l_id) = leader_id {
+            state_machines[l_id]
+                .lock()
+                .unwrap()
+                .pending_transitions
                 .push(ArithmeticOperation { delta: 5, id: 1 });
-            let _ = notifiers[i].1.send(());
+            let _ = notifiers[l_id].1.send(());
             break;
         }
     }
 
     thread::sleep(Duration::from_secs(2));
     for (i, (cluster, _)) in clusters.iter().enumerate() {
-        let mut c = cluster.lock().unwrap();
-        if c.leader {
-            c.pending_transitions
+        let mut leader_id = None;
+        if cluster.lock().unwrap().leader {
+            leader_id = Some(i);
+        }
+
+        if let Some(l_id) = leader_id {
+            state_machines[l_id]
+                .lock()
+                .unwrap()
+                .pending_transitions
                 .push(ArithmeticOperation { delta: -51, id: 2 });
-            let _ = notifiers[i].1.send(());
+            let _ = notifiers[l_id].1.send(());
             break;
         }
     }
 
     thread::sleep(Duration::from_secs(2));
     for (i, (cluster, _)) in clusters.iter().enumerate() {
-        let mut c = cluster.lock().unwrap();
-        if c.leader {
-            c.pending_transitions
+        let mut leader_id = None;
+        if cluster.lock().unwrap().leader {
+            leader_id = Some(i);
+        }
+
+        if let Some(l_id) = leader_id {
+            state_machines[l_id]
+                .lock()
+                .unwrap()
+                .pending_transitions
                 .push(ArithmeticOperation { delta: -511, id: 3 });
-            let _ = notifiers[i].1.send(());
+            let _ = notifiers[l_id].1.send(());
             break;
         }
     }
 
     thread::sleep(Duration::from_secs(2));
     for (i, (cluster, _)) in clusters.iter().enumerate() {
-        let mut c = cluster.lock().unwrap();
-        if c.leader {
-            c.pending_transitions
+        let mut leader_id = None;
+        if cluster.lock().unwrap().leader {
+            leader_id = Some(i);
+        }
+
+        if let Some(l_id) = leader_id {
+            state_machines[l_id]
+                .lock()
+                .unwrap()
+                .pending_transitions
                 .push(ArithmeticOperation { delta: 3, id: 4 });
-            let _ = notifiers[i].1.send(());
+            let _ = notifiers[l_id].1.send(());
             break;
         }
     }
@@ -217,8 +245,8 @@ fn run_replicas() {
         let mut c = cluster.lock().unwrap();
         c.halt = true;
     }
-    thread::sleep(Duration::from_secs(5));
 
+    thread::sleep(Duration::from_secs(5));
     let applied_transactions: Vec<(usize, usize)> = applied_rx.try_iter().collect();
     let expected_vec: Vec<usize> = vec![0, 1, 2, 3, 4];
     assert_eq!(
