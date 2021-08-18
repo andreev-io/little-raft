@@ -2,8 +2,13 @@
 The lightest distributed consensus library. Run your own replicated state machine! :heart:
 
 ## Using
-To use this library, you only need to do three things.
+First, import the crate. In your `Cargo.toml`, add
+```
+[dependencies]
+little_raft = "0.1"
+```
 
+Then, to start running Little Raft, you only need to do three things.
 1. Implement the StateMachine that you want your cluster to maintain. Little Raft will take care of replicating this machine across the cluster and achieving consensus on its state.
 ```rust
 /// StateMachine describes a user-defined state machine that is replicated
@@ -122,7 +127,7 @@ where
 ```
 
 
-With that, you're good to go. We are working on examples, but for now you can look at the `little_raft/tests` directory. We're working on adding more tests.
+With that, you're good to go. We are working on examples, but for now you can look at the `little_raft/tests` directory and at the documentation at [https://docs.rs/little_raft/0.1.2/little_raft/](https://docs.rs/little_raft/0.1.2/little_raft/). We're working on adding more tests.
 
 
 ## Testing
