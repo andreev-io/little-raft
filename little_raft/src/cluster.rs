@@ -17,7 +17,8 @@ where
 
     /// This function is used by the Replica to receive pending messages from
     /// the cluster. The receive_messages implementation must not block and must
-    /// not return the same message more than once.
+    /// not return the same message more than once. Note that receive_messages
+    /// is only called when the Replica is notified via the recv_msg channel.
     fn receive_messages(&mut self) -> Vec<Message<T>>;
 
     /// By returning true from halt you can signal to the Replica that it should

@@ -1,14 +1,15 @@
 # Little Raft
 The lightest distributed consensus library. Run your own replicated state machine! :heart:
 
-## Using
-First, import the crate. In your `Cargo.toml`, add
+## Installing
+Simply import the crate. In your `Cargo.toml`, add
 ```
 [dependencies]
 little_raft = "0.1"
 ```
 
-Then, to start running Little Raft, you only need to do three things.
+## Using
+To start running Little Raft, you only need to do three things.
 1. Implement the StateMachine that you want your cluster to maintain. Little Raft will take care of replicating this machine across the cluster and achieving consensus on its state.
 ```rust
 /// StateMachine describes a user-defined state machine that is replicated
@@ -134,6 +135,21 @@ With that, you're good to go. We are working on examples, but for now you can lo
 Run `cargo test`.
 
 ## Contributing
-Contributions are very welcome! Do remember that one of the goals of this library is to be as small and simple as possible. Let's keep the code in `little_raft/src` under 1,000 lines. No PRs breaking this rule will be merged.
+Contributions are very welcome! Do remember that one of the goals of this library is to be as small and simple as possible. Let's keep the code in `little_raft/src` **under 1,000 lines**. PRs breaking this rule will be declined.
+```bash
+> cloc little_raft/src
+       6 text files.
+       6 unique files.                              
+       0 files ignored.
+
+github.com/AlDanial/cloc v 1.90  T=0.02 s (369.2 files/s, 56185.0 lines/s)
+-------------------------------------------------------------------------------
+Language                     files          blank        comment           code
+-------------------------------------------------------------------------------
+Rust                             6             82            199            632
+-------------------------------------------------------------------------------
+SUM:                             6             82            199            632
+-------------------------------------------------------------------------------
+```
 
 You are welcome to pick up and work on any of the issues open for this project. Or you can submit new issues if anything comes up from your experience using this library.
