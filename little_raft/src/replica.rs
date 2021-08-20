@@ -259,7 +259,7 @@ where
     }
 
     fn process_message(&mut self, message: Message<T>) {
-        match self.state {  
+        match self.state {
             State::Leader => self.process_message_as_leader(message),
             State::Candidate => self.process_message_as_candidate(message),
             State::Follower => self.process_message_as_follower(message),
@@ -441,6 +441,7 @@ where
                         vote_granted: true,
                     },
                 );
+                self.voted_for = Some(from_id);
             } else {
                 // If the criteria are not met, do not grant the vote.
                 self.cluster.lock().unwrap().send_message(
