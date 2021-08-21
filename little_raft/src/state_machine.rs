@@ -47,9 +47,10 @@ where
     fn apply_transition(&mut self, transition: T);
 
     /// This function is used to receive transitions from the user that need to
-    /// be applied to the replicated state machine. Note that while all Replicas
-    /// poll get_pending_transitions periodically, only the Leader Replica
-    /// actually processes them. All other Replicas discard pending transitions.
-    /// get_pending_transitions must not return the same transition twice.
+    /// be applied to the replicated state machine. Note that only the Leader
+    /// Replica processes transitions and only when notified via the
+    /// recv_transition channel. All other Replicas poll for transitions and
+    /// discard them. get_pending_transitions must not return the same
+    /// transition twice.
     fn get_pending_transitions(&mut self) -> Vec<T>;
 }

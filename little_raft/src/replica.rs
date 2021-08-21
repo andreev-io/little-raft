@@ -203,7 +203,7 @@ where
                     .expect("could not react to a new message");
                 let messages = self.cluster.lock().unwrap().receive_messages();
                 for message in messages {
-                    self.process_message_as_leader(message);
+                    self.process_message(message);
                 }
             }
             // Process pending transitions.
@@ -242,7 +242,7 @@ where
                 }
 
                 for message in messages {
-                    self.process_message_as_follower(message);
+                    self.process_message(message);
                 }
             }
             // Become candidate and update elction deadline.
@@ -252,8 +252,18 @@ where
             }
         }
 
-        // Load new transitions.
+        // Load new transitions. The follower will ignore these transitions, but
+        // they are still polled for periodically to ensure there are no stale
+        // transitions in case the Replica's state changes.
         self.load_new_transitions();
+    }
+
+    fn process_message(&mut self, message: Message<T>) {
+        match self.state {
+            State::Leader => self.process_message_as_leader(message),
+            State::Candidate => self.process_message_as_candidate(message),
+            State::Follower => self.process_message_as_follower(message),
+        }
     }
 
     fn update_election_deadline(&mut self) {
@@ -273,7 +283,7 @@ where
                     self.update_election_deadline();
                 }
                 for message in messages {
-                    self.process_message_as_candidate(message);
+                    self.process_message(message);
                 }
             }
             // Become candidate and update elction deadline.
@@ -283,7 +293,9 @@ where
             }
         }
 
-        // Load new transitions.
+        // Load new transitions. The candidate will ignore these transitions,
+        // but they are still polled for periodically to ensure there are no
+        // stale transitions in case the Replica's state changes.
         self.load_new_transitions();
     }
 
@@ -376,7 +388,7 @@ where
             } => {
                 if term > self.current_term {
                     // Become follower if another node's term is higher.
-                    self.cluster.lock().unwrap().register_leader(Some(from_id));
+                    self.cluster.lock().unwrap().register_leader(None);
                     self.become_follower(term);
                 } else if success {
                     // Update information about the peer's logs.
@@ -411,7 +423,7 @@ where
             );
         } else if self.current_term < term {
             // Become follower if the other replica's term is higher.
-            self.cluster.lock().unwrap().register_leader(Some(from_id));
+            self.cluster.lock().unwrap().register_leader(None);
             self.become_follower(term);
         }
 
@@ -420,7 +432,7 @@ where
                 && self.log[self.log.len() - 1].term <= last_log_term
             {
                 // If the criteria are met, grant the vote.
-                self.cluster.lock().unwrap().register_leader(Some(from_id));
+                self.cluster.lock().unwrap().register_leader(None);
                 self.cluster.lock().unwrap().send_message(
                     from_id,
                     Message::VoteResponse {
@@ -429,6 +441,7 @@ where
                         vote_granted: true,
                     },
                 );
+                self.voted_for = Some(from_id);
             } else {
                 // If the criteria are not met, do not grant the vote.
                 self.cluster.lock().unwrap().send_message(
@@ -559,7 +572,7 @@ where
     fn process_message_as_candidate(&mut self, message: Message<T>) {
         match message {
             Message::AppendEntryRequest { term, from_id, .. } => {
-                self.process_transition_request_as_candidate(term, from_id, message)
+                self.process_append_entry_request_as_candidate(term, from_id, message)
             }
             Message::VoteRequest { term, from_id, .. } => {
                 self.process_vote_request_as_candidate(term, from_id, message)
@@ -580,7 +593,7 @@ where
         vote_granted: bool,
     ) {
         if term > self.current_term {
-            self.cluster.lock().unwrap().register_leader(Some(from_id));
+            self.cluster.lock().unwrap().register_leader(None);
             self.become_follower(term);
         } else if vote_granted {
             // Record that the vote has been granted.
@@ -603,9 +616,9 @@ where
         message: Message<T>,
     ) {
         if term > self.current_term {
-            self.cluster.lock().unwrap().register_leader(Some(from_id));
+            self.cluster.lock().unwrap().register_leader(None);
             self.become_follower(term);
-            self.process_message_as_follower(message);
+            self.process_message(message);
         } else {
             self.cluster.lock().unwrap().send_message(
                 from_id,
@@ -618,16 +631,16 @@ where
         }
     }
 
-    fn process_transition_request_as_candidate(
+    fn process_append_entry_request_as_candidate(
         &mut self,
         term: usize,
         from_id: ReplicaID,
         message: Message<T>,
     ) {
         if term >= self.current_term {
-            self.cluster.lock().unwrap().register_leader(Some(from_id));
+            self.cluster.lock().unwrap().register_leader(None);
             self.become_follower(term);
-            self.process_message_as_follower(message);
+            self.process_message(message);
         } else {
             self.cluster.lock().unwrap().send_message(
                 from_id,

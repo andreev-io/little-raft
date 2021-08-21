@@ -1,9 +1,15 @@
 # Little Raft
 The lightest distributed consensus library. Run your own replicated state machine! :heart:
 
-## Using
-To use this library, you only need to do three things.
+## Installing
+Simply import the crate. In your `Cargo.toml`, add
+```
+[dependencies]
+little_raft = "0.1"
+```
 
+## Using
+To start running Little Raft, you only need to do three things.
 1. Implement the StateMachine that you want your cluster to maintain. Little Raft will take care of replicating this machine across the cluster and achieving consensus on its state.
 ```rust
 /// StateMachine describes a user-defined state machine that is replicated
@@ -122,13 +128,28 @@ where
 ```
 
 
-With that, you're good to go. We are working on examples, but for now you can look at the `little_raft/tests` directory. We're working on adding more tests.
+With that, you're good to go. We are working on examples, but for now you can look at the `little_raft/tests` directory and at the documentation at [https://docs.rs/little_raft/0.1.3/little_raft/](https://docs.rs/little_raft/0.1.3/little_raft/). We're working on adding more tests.
 
 
 ## Testing
 Run `cargo test`.
 
 ## Contributing
-Contributions are very welcome! Do remember that one of the goals of this library is to be as small and simple as possible. Let's keep the code in `little_raft/src` under 1,000 lines. No PRs breaking this rule will be merged.
+Contributions are very welcome! Do remember that one of the goals of this library is to be as small and simple as possible. Let's keep the code in `little_raft/src` **under 1,000 lines**. PRs breaking this rule will be declined.
+```bash
+> cloc little_raft/src
+       6 text files.
+       6 unique files.                              
+       0 files ignored.
+
+github.com/AlDanial/cloc v 1.90  T=0.02 s (369.2 files/s, 56185.0 lines/s)
+-------------------------------------------------------------------------------
+Language                     files          blank        comment           code
+-------------------------------------------------------------------------------
+Rust                             6             82            199            632
+-------------------------------------------------------------------------------
+SUM:                             6             82            199            632
+-------------------------------------------------------------------------------
+```
 
 You are welcome to pick up and work on any of the issues open for this project. Or you can submit new issues if anything comes up from your experience using this library.
