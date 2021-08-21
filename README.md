@@ -128,7 +128,7 @@ where
 ```
 
 
-With that, you're good to go. We are working on examples, but for now you can look at the `little_raft/tests` directory and at the documentation at [https://docs.rs/little_raft/0.1.2/little_raft/](https://docs.rs/little_raft/0.1.2/little_raft/). We're working on adding more tests.
+With that, you're good to go. We are working on examples, but for now you can look at the `little_raft/tests` directory and at the documentation at [https://docs.rs/little_raft/0.1.3/little_raft/](https://docs.rs/little_raft/0.1.3/little_raft/). We're working on adding more tests.
 
 
 ## Testing
