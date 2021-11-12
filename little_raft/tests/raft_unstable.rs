@@ -16,7 +16,7 @@ const MAX_ELECTION_TIMEOUT: Duration = Duration::from_millis(950);
 
 // Our state machine will carry out simple plus and minus operations on a
 // number, starting from zero.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct ArithmeticOperation {
     id: usize,
     delta: i32,
@@ -288,6 +288,7 @@ fn run_replicas() {
     let state_machines = create_state_machines(n, applied_transitions_tx);
     let (message_tx, transition_tx, message_rx, transition_rx) = create_notifiers(n);
     for i in 0..n {
+        let noop = noop.clone();
         let local_peer_ids = peer_ids[i].clone();
         let cluster = clusters[i].clone();
         let state_machine = state_machines[i].clone();

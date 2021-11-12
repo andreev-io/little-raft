@@ -3,7 +3,7 @@ use crate::state_machine::StateMachineTransition;
 
 /// LogEntry is a state machine transition along with some metadata needed for
 /// Raft.
-#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd)]
 pub struct LogEntry<T>
 where
     T: StateMachineTransition,
