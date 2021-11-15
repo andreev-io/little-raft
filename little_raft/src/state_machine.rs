@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 /// TransitionState describes the state of a particular transition.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TransitionState {
     /// Queued transitions have been received from the user but have not been
     /// processed yet. They are in the queue.
@@ -20,7 +20,7 @@ pub enum TransitionState {
 
 /// StateMachineTransition describes a user-defined transition that can be
 /// applied to the state machine replicated by Raft.
-pub trait StateMachineTransition: Copy + Clone + Debug {
+pub trait StateMachineTransition: Clone + Debug {
     /// TransitionID is used to identify the transition.
     type TransitionID: Eq;
 

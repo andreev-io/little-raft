@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 enum State {
     Follower,
     Candidate,
@@ -143,9 +143,9 @@ where
             log: vec![LogEntry {
                 term: 0,
                 index: 0,
-                transition: noop_transition,
+                transition: noop_transition.clone(),
             }],
-            noop_transition: noop_transition,
+            noop_transition: noop_transition.clone(),
             commit_index: 0,
             last_applied: 0,
             next_index: BTreeMap::new(),
@@ -351,7 +351,7 @@ where
         while self.commit_index > self.last_applied {
             self.last_applied += 1;
             let mut state_machine = self.state_machine.lock().unwrap();
-            state_machine.apply_transition(self.log[self.last_applied].transition);
+            state_machine.apply_transition(self.log[self.last_applied].transition.clone());
             state_machine.register_transition_state(
                 self.log[self.last_applied].transition.get_id(),
                 TransitionState::Applied,
@@ -367,7 +367,7 @@ where
             if self.state == State::Leader {
                 self.log.push(LogEntry {
                     index: self.log.len(),
-                    transition: transition,
+                    transition: transition.clone(),
                     term: self.current_term,
                 });
 
@@ -674,7 +674,7 @@ where
         // in the part 8 of the paper.
         self.log.push(LogEntry {
             index: self.log.len(),
-            transition: self.noop_transition,
+            transition: self.noop_transition.clone(),
             term: self.current_term,
         });
     }
