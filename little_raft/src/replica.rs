@@ -703,5 +703,9 @@ where
             last_log_index: self.log.len() - 1,
             last_log_term: self.log[self.log.len() - 1].term,
         });
+
+        if self.peer_ids.len() == 0 {
+            self.become_leader();
+        }
     }
 }
