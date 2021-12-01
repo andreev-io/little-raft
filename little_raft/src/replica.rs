@@ -212,23 +212,28 @@ where
                 oper.recv(recv_transition)
                     .expect("could not react to a new transition");
                 self.load_new_transitions();
+                self.broadcast_append_entry_request();
             }
             // Broadcast heartbeat messages.
             i if i == heartbeat => {
                 oper.recv(recv_heartbeat)
                     .expect("could not react to the heartbeat");
-                self.broadcast_message(|peer_id: ReplicaID| Message::AppendEntryRequest {
-                    term: self.current_term,
-                    from_id: self.id,
-                    prev_log_index: self.next_index[&peer_id] - 1,
-                    prev_log_term: self.log[self.next_index[&peer_id] - 1].term,
-                    entries: self.get_entries_for_peer(peer_id),
-                    commit_index: self.commit_index,
-                });
+                self.broadcast_append_entry_request();
                 self.heartbeat_timer.renew();
             }
             _ => unreachable!(),
         }
+    }
+
+    fn broadcast_append_entry_request(&mut self) {
+        self.broadcast_message(|peer_id: ReplicaID| Message::AppendEntryRequest {
+            term: self.current_term,
+            from_id: self.id,
+            prev_log_index: self.next_index[&peer_id] - 1,
+            prev_log_term: self.log[self.next_index[&peer_id] - 1].term,
+            entries: self.get_entries_for_peer(peer_id),
+            commit_index: self.commit_index,
+        });
     }
 
     fn poll_as_follower(&mut self, recv_msg: &Receiver<()>) {
