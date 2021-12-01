@@ -418,10 +418,11 @@ where
                     // to the Raft paper's guidance on decreasing next_index by
                     // one at a time, but is more performant in cases when we
                     // can cut straight to the follower's last_index+1.
-                    let mismatch_index = mismatch_index.unwrap();
-                    if mismatch_index < self.next_index[&from_id] {
-                        let next_index = cmp::min(mismatch_index, last_index + 1);
-                        self.next_index.insert(from_id, next_index);
+                    if let Some(mismatch_index) = mismatch_index {
+                        if mismatch_index < self.next_index[&from_id] {
+                            let next_index = cmp::min(mismatch_index, last_index + 1);
+                            self.next_index.insert(from_id, next_index);
+                        }
                     }
                 }
             }
