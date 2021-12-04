@@ -163,10 +163,6 @@ where
     /// new messages from the Cluster are available. The Replica will not poll
     /// for messages from the Cluster unless notified through recv_msg.
     ///
-    /// recv_msg is a channel on which the user must notify the Replica whenever
-    /// new messages from the Cluster are available. The Replica will not poll
-    /// for messages from the Cluster unless notified through recv_msg.
-    ///
     /// recv_transition is a channel on which the user must notify the Replica
     /// whenever new transitions to be processed for the StateMachine are
     /// available. The Replica will not poll for pending transitions for the
