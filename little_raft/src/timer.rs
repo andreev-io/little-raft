@@ -10,7 +10,7 @@ pub struct Timer {
 impl Timer {
     pub fn new(timeout: Duration) -> Timer {
         Timer {
-            timeout: timeout,
+            timeout,
             rx: Timer::get_timeout_channel(timeout),
         }
     }
