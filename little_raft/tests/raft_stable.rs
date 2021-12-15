@@ -1,11 +1,13 @@
+use bytes::Bytes;
 use crossbeam_channel as channel;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use little_raft::{
     cluster::Cluster,
     message::Message,
     replica::Replica,
-    state_machine::{StateMachine, StateMachineTransition, TransitionState},
+    state_machine::{Snapshot, StateMachine, StateMachineTransition, TransitionState},
 };
+use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
 
 use std::{collections::BTreeMap, thread, time::Duration};
@@ -41,6 +43,7 @@ struct Calculator {
 impl StateMachine<ArithmeticOperation> for Calculator {
     fn apply_transition(&mut self, transition: ArithmeticOperation) {
         self.value += transition.delta;
+        println!("id {} my value is now {} after applying delta {}", self.id, self.value, transition.delta);
     }
 
     fn register_transition_state(
@@ -61,6 +64,26 @@ impl StateMachine<ArithmeticOperation> for Calculator {
         let cur = self.pending_transitions.clone();
         self.pending_transitions = Vec::new();
         cur
+    }
+
+    fn get_snapshot(&mut self) -> Option<Snapshot> {
+        println!("checked for snapshot");
+        None
+    }
+
+    fn create_snapshot(&mut self, index: usize, term: usize) -> Snapshot {
+        println!("created snapshot");
+        Snapshot {
+            last_included_index: index,
+            last_included_term: term,
+            data: Bytes::from(self.value.to_be_bytes().to_vec()),
+        }
+    }
+
+    fn set_snapshot(&mut self, snapshot: Snapshot) {
+        let v: Vec<u8> = snapshot.data.into_iter().collect();
+        self.value = i32::from_be_bytes(v[..].try_into().expect("incorrect length"));
+        println!("my value is now {} after loading", self.value);
     }
 }
 
@@ -263,7 +286,7 @@ fn halt_clusters(clusters: Vec<Arc<Mutex<ThreadCluster>>>) {
         let mut c = cluster.lock().unwrap();
         c.halt = true;
     }
-    thread::sleep(Duration::from_secs(2));
+    thread::sleep(Duration::from_secs(3));
 }
 
 #[test]
@@ -284,6 +307,7 @@ fn run_replicas() {
     let (applied_transitions_tx, applied_transitions_rx) = unbounded();
     let state_machines = create_state_machines(n, applied_transitions_tx);
     let (message_tx, transition_tx, message_rx, transition_rx) = create_notifiers(n);
+
     for i in 0..n {
         let noop = noop.clone();
         let local_peer_ids = peer_ids[i].clone();
@@ -291,12 +315,14 @@ fn run_replicas() {
         let state_machine = state_machines[i].clone();
         let m_rx = message_rx[i].clone();
         let t_rx = transition_rx[i].clone();
+
         thread::spawn(move || {
             let mut replica = Replica::new(
                 i,
                 local_peer_ids,
                 cluster,
                 state_machine,
+                1,
                 noop.clone(),
                 HEARTBEAT_TIMEOUT,
                 (MIN_ELECTION_TIMEOUT, MAX_ELECTION_TIMEOUT),
@@ -332,7 +358,7 @@ fn run_replicas() {
         3,
     );
 
-    run_arithmetic_operation_on_cluster(clusters.clone(), state_machines, transition_tx, 3, 4);
+    run_arithmetic_operation_on_cluster(clusters.clone(), state_machines.clone(), transition_tx.clone(), 3, 4);
 
     halt_clusters(clusters);
 
