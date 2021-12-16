@@ -247,8 +247,8 @@ fn run_arithmetic_operation_on_cluster(
                 .unwrap()
                 .pending_transitions
                 .push(ArithmeticOperation {
-                    delta: delta,
-                    id: id,
+                    delta,
+                    id,
                 });
             transition_notifiers[cluster.id]
                 .send(())
@@ -309,7 +309,7 @@ fn run_replicas() {
         });
     }
 
-    run_clusters_communication(clusters.clone(), receivers.clone(), message_tx);
+    run_clusters_communication(clusters.clone(), receivers, message_tx);
 
     run_arithmetic_operation_on_cluster(
         clusters.clone(),
@@ -322,9 +322,9 @@ fn run_replicas() {
     // Signal to the 0th replica that it should halt, give the remaining
     // replicas some time to reelect the leader, and mark the 0th replica as a
     // non-leader.
-    clusters.clone()[0].lock().unwrap().halt = true;
+    clusters[0].lock().unwrap().halt = true;
     thread::sleep(Duration::from_secs(2));
-    clusters.clone()[0].lock().unwrap().is_leader = false;
+    clusters[0].lock().unwrap().is_leader = false;
 
     run_arithmetic_operation_on_cluster(
         clusters.clone(),
@@ -344,13 +344,13 @@ fn run_replicas() {
 
     run_arithmetic_operation_on_cluster(
         clusters.clone(),
-        state_machines.clone(),
-        transition_tx.clone(),
+        state_machines,
+        transition_tx,
         3,
         4,
     );
 
-    halt_clusters(clusters.clone());
+    halt_clusters(clusters);
 
     // Below we confirm that every replica applied the same transitions in the
     // same order.

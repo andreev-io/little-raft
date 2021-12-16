@@ -15,10 +15,7 @@ impl Timer {
             let _ = tx.send(());
         });
 
-        Timer {
-            timeout: timeout,
-            rx: rx,
-        }
+        Timer { timeout, rx }
     }
 
     pub fn renew(&mut self) {
