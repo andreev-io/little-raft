@@ -246,10 +246,7 @@ fn run_arithmetic_operation_on_cluster(
                 .lock()
                 .unwrap()
                 .pending_transitions
-                .push(ArithmeticOperation {
-                    delta,
-                    id,
-                });
+                .push(ArithmeticOperation { delta, id });
             transition_notifiers[cluster.id]
                 .send(())
                 .expect("could not send transition notification");
@@ -342,13 +339,7 @@ fn run_replicas() {
         3,
     );
 
-    run_arithmetic_operation_on_cluster(
-        clusters.clone(),
-        state_machines,
-        transition_tx,
-        3,
-        4,
-    );
+    run_arithmetic_operation_on_cluster(clusters.clone(), state_machines, transition_tx, 3, 4);
 
     halt_clusters(clusters);
 
