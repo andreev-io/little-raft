@@ -247,8 +247,8 @@ fn run_arithmetic_operation_on_cluster(
                 .unwrap()
                 .pending_transitions
                 .push(ArithmeticOperation {
-                    delta: delta,
-                    id: id,
+                    delta,
+                    id,
                 });
             transition_notifiers[cluster.id]
                 .send(())
@@ -309,7 +309,7 @@ fn run_replicas() {
         });
     }
 
-    run_clusters_communication(clusters.clone(), receivers.clone(), message_tx);
+    run_clusters_communication(clusters.clone(), receivers, message_tx);
 
     run_arithmetic_operation_on_cluster(
         clusters.clone(),
@@ -337,13 +337,13 @@ fn run_replicas() {
 
     run_arithmetic_operation_on_cluster(
         clusters.clone(),
-        state_machines.clone(),
-        transition_tx.clone(),
+        state_machines,
+        transition_tx,
         3,
         4,
     );
 
-    halt_clusters(clusters.clone());
+    halt_clusters(clusters);
 
     // Below we confirm that every replica applied the same transitions in the
     // same order.

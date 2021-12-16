@@ -6,6 +6,7 @@ use crate::{
 };
 use crossbeam_channel::{Receiver, Select};
 use rand::Rng;
+use std::cmp::Ordering;
 use std::sync::{Arc, Mutex};
 use std::{
     cmp,
@@ -133,10 +134,10 @@ where
         election_timeout_range: (Duration, Duration),
     ) -> Replica<S, T, C> {
         Replica {
-            state_machine: state_machine,
-            cluster: cluster,
-            peer_ids: peer_ids,
-            id: id,
+            state_machine,
+            cluster,
+            peer_ids,
+            id,
             current_term: 0,
             current_votes: None,
             state: State::Follower,
@@ -146,7 +147,7 @@ where
                 index: 0,
                 transition: noop_transition.clone(),
             }],
-            noop_transition: noop_transition.clone(),
+            noop_transition,
             commit_index: 0,
             last_applied: 0,
             next_index: BTreeMap::new(),
@@ -239,7 +240,7 @@ where
                 let messages = self.cluster.lock().unwrap().receive_messages();
                 // Update the election deadline if more than zero messages were
                 // actually received.
-                if messages.len() != 0 {
+                if !messages.is_empty() {
                     self.update_election_deadline();
                 }
 
@@ -281,7 +282,7 @@ where
                 let messages = self.cluster.lock().unwrap().receive_messages();
                 // Update the election deadline if more than zero messages were
                 // actually received.
-                if messages.len() != 0 {
+                if !messages.is_empty() {
                     self.update_election_deadline();
                 }
                 for message in messages {
@@ -309,7 +310,7 @@ where
             self.cluster
                 .lock()
                 .unwrap()
-                .send_message(peer_id.clone(), message_generator(peer_id.clone()))
+                .send_message(*peer_id, message_generator(*peer_id))
         });
     }
 
@@ -381,48 +382,46 @@ where
     }
 
     fn process_message_as_leader(&mut self, message: Message<T>) {
-        match message {
-            Message::AppendEntryResponse {
-                from_id,
-                success,
-                term,
-                last_index,
-                mismatch_index,
-            } => {
-                if term > self.current_term {
-                    // Become follower if another node's term is higher.
-                    self.cluster.lock().unwrap().register_leader(None);
-                    self.become_follower(term);
-                } else if success {
-                    // Update information about the peer's logs.
-                    self.next_index.insert(from_id, last_index + 1);
-                    self.match_index.insert(from_id, last_index);
-                } else {
-                    // Update information about the peer's logs.
-                    //
-                    // If the mismatch_index is greater than or equal to the
-                    // existing next_index, then we know that this rejection is
-                    // a stray out-of-order or duplicate rejection, which we can
-                    // ignore. The reason we know that is because mismatch_index
-                    // is set by the follower to prev_log_index, which was in
-                    // turn set by the leader to next_index-1. Hence
-                    // mismatch_index can't be greater than or equal to
-                    // next_index.
-                    //
-                    // If the mismatch_index isn't stray, we set next_index to
-                    // the min of next_index and last_index; this is equivalent
-                    // to the Raft paper's guidance on decreasing next_index by
-                    // one at a time, but is more performant in cases when we
-                    // can cut straight to the follower's last_index+1.
-                    if let Some(mismatch_index) = mismatch_index {
-                        if mismatch_index < self.next_index[&from_id] {
-                            let next_index = cmp::min(mismatch_index, last_index + 1);
-                            self.next_index.insert(from_id, next_index);
-                        }
+        if let Message::AppendEntryResponse {
+            from_id,
+            term,
+            success,
+            last_index,
+            mismatch_index,
+        } = message
+        {
+            if term > self.current_term {
+                // Become follower if another node's term is higher.
+                self.cluster.lock().unwrap().register_leader(None);
+                self.become_follower(term);
+            } else if success {
+                // Update information about the peer's logs.
+                self.next_index.insert(from_id, last_index + 1);
+                self.match_index.insert(from_id, last_index);
+            } else {
+                // Update information about the peer's logs.
+                //
+                // If the mismatch_index is greater than or equal to the
+                // existing next_index, then we know that this rejection is
+                // a stray out-of-order or duplicate rejection, which we can
+                // ignore. The reason we know that is because mismatch_index
+                // is set by the follower to prev_log_index, which was in
+                // turn set by the leader to next_index-1. Hence
+                // mismatch_index can't be greater than or equal to
+                // next_index.
+                //
+                // If the mismatch_index isn't stray, we set next_index to
+                // the min of next_index and last_index; this is equivalent
+                // to the Raft paper's guidance on decreasing next_index by
+                // one at a time, but is more performant in cases when we
+                // can cut straight to the follower's last_index+1.
+                if let Some(mismatch_index) = mismatch_index {
+                    if mismatch_index < self.next_index[&from_id] {
+                        let next_index = cmp::min(mismatch_index, last_index + 1);
+                        self.next_index.insert(from_id, next_index);
                     }
                 }
             }
-            _ => {}
         }
     }
 
@@ -433,20 +432,24 @@ where
         last_log_index: usize,
         last_log_term: usize,
     ) {
-        if self.current_term > term {
-            // Do not vote for Replicas that are behind.
-            self.cluster.lock().unwrap().send_message(
-                from_id,
-                Message::VoteResponse {
-                    from_id: self.id,
-                    term: self.current_term,
-                    vote_granted: false,
-                },
-            );
-        } else if self.current_term < term {
-            // Become follower if the other replica's term is higher.
-            self.cluster.lock().unwrap().register_leader(None);
-            self.become_follower(term);
+        match self.current_term.cmp(&term) {
+            Ordering::Greater => {
+                // Do not vote for Replicas that are behind.
+                self.cluster.lock().unwrap().send_message(
+                    from_id,
+                    Message::VoteResponse {
+                        from_id: self.id,
+                        term: self.current_term,
+                        vote_granted: false,
+                    },
+                );
+            }
+            Ordering::Less => {
+                // Become follower if the other replica's term is higher.
+                self.cluster.lock().unwrap().register_leader(None);
+                self.become_follower(term);
+            }
+            _ => {}
         }
 
         if self.voted_for == None || self.voted_for == Some(from_id) {
@@ -541,7 +544,7 @@ where
 
         // Update local commit index to either the received commit index or the
         // latest local log position, whichever is smaller.
-        if commit_index > self.commit_index && self.log.len() != 0 {
+        if commit_index > self.commit_index && !self.log.is_empty() {
             self.commit_index = if commit_index < self.log[self.log.len() - 1].index {
                 commit_index
             } else {
@@ -685,8 +688,8 @@ where
         self.next_index = BTreeMap::new();
         self.match_index = BTreeMap::new();
         for peer_id in &self.peer_ids {
-            self.next_index.insert(peer_id.clone(), self.log.len());
-            self.match_index.insert(peer_id.clone(), 0);
+            self.next_index.insert(*peer_id, self.log.len());
+            self.match_index.insert(*peer_id, 0);
         }
 
         // If the previous Leader had some uncommitted entries that were
@@ -727,7 +730,7 @@ where
             last_log_term: self.log[self.log.len() - 1].term,
         });
 
-        if self.peer_ids.len() == 0 {
+        if self.peer_ids.is_empty() {
             self.become_leader();
         }
     }
