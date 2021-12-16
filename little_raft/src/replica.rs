@@ -364,19 +364,20 @@ where
     fn load_new_transitions(&mut self) {
         // Load new transitions. Ignore the transitions if the replica is not
         // the Leader.
+        if self.state != State::Leader {
+            return
+        }
         let transitions = self.state_machine.lock().unwrap().get_pending_transitions();
         for transition in transitions {
-            if self.state == State::Leader {
-                self.log.push(LogEntry {
-                    index: self.log.len(),
-                    transition: transition.clone(),
-                    term: self.current_term,
-                });
+            self.log.push(LogEntry {
+                index: self.log.len(),
+                transition: transition.clone(),
+                term: self.current_term,
+            });
 
-                let mut state_machine = self.state_machine.lock().unwrap();
-                state_machine
-                    .register_transition_state(transition.get_id(), TransitionState::Queued);
-            }
+            let mut state_machine = self.state_machine.lock().unwrap();
+            state_machine
+                .register_transition_state(transition.get_id(), TransitionState::Queued);
         }
     }
 

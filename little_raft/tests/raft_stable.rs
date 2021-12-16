@@ -76,11 +76,7 @@ struct ThreadCluster {
 impl Cluster<ArithmeticOperation> for ThreadCluster {
     fn register_leader(&mut self, leader_id: Option<usize>) {
         if let Some(id) = leader_id {
-            if id == self.id {
-                self.is_leader = true;
-            } else {
-                self.is_leader = false;
-            }
+            self.is_leader = id == self.id
         } else {
             self.is_leader = false;
         }
