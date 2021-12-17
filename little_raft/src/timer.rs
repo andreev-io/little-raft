@@ -11,25 +11,25 @@ impl Timer {
     pub fn new(timeout: Duration) -> Timer {
         Timer {
             timeout: timeout,
-            rx: get_timeout_channel(timeout),
+            rx: Timer::get_timeout_channel(timeout),
         }
     }
 
     pub fn renew(&mut self) {
-        self.rx = get_timeout_channel(self.timeout);
+        self.rx = Timer::get_timeout_channel(self.timeout);
     }
 
     pub fn get_rx(&self) -> &Receiver<()> {
         &self.rx
     }
-}
 
-fn get_timeout_channel(timeout: Duration) -> Receiver<()> {
-    let (tx, rx) = bounded(1);
-    thread::spawn(move || {
-        thread::sleep(timeout);
-        let _ = tx.send(());
-    });
+    fn get_timeout_channel(timeout: Duration) -> Receiver<()> {
+        let (tx, rx) = bounded(1);
+        thread::spawn(move || {
+            thread::sleep(timeout);
+            let _ = tx.send(());
+        });
 
-    rx
+        rx
+    }
 }
