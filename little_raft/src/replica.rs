@@ -1,7 +1,7 @@
 use crate::{
     cluster::Cluster,
     message::{LogEntry, Message},
-    state_machine::{StateMachine, StateMachineTransition, TransitionState},
+    state_machine::{StateMachine, StateMachineTransition, TransitionState, TransitionAbandonedReason},
     timer::Timer,
 };
 use crossbeam_channel::{Receiver, Select};
@@ -377,6 +377,11 @@ where
                 let mut state_machine = self.state_machine.lock().unwrap();
                 state_machine
                     .register_transition_state(transition.get_id(), TransitionState::Queued);
+            } else {
+                let mut state_machine = self.state_machine.lock().unwrap();
+                state_machine
+                    .register_transition_state(
+                        transition.get_id(), TransitionState::Abandoned(TransitionAbandonedReason::NotLeader));
             }
         }
     }

@@ -16,6 +16,15 @@ pub enum TransitionState {
     /// Applied transitions have been replicated across the cluster and have
     /// been applied to the local state machine.
     Applied,
+
+    /// Abandoned transitions have been ignored by the replica.
+    Abandoned(TransitionAbandonedReason),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TransitionAbandonedReason {
+    // NotLeader transitions have been abandoned because the replica is not the cluster leadedr.
+    NotLeader,
 }
 
 /// StateMachineTransition describes a user-defined transition that can be
