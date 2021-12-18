@@ -365,7 +365,8 @@ where
     fn load_new_transitions(&mut self) {
         // Load new transitions. Ignore the transitions if the replica is not
         // the Leader.
-        let transitions = self.state_machine.lock().unwrap().get_pending_transitions();
+        let mut state_machine = self.state_machine.lock().unwrap();
+        let transitions = state_machine.get_pending_transitions();
         for transition in transitions {
             if self.state == State::Leader {
                 self.log.push(LogEntry {
@@ -374,11 +375,9 @@ where
                     term: self.current_term,
                 });
 
-                let mut state_machine = self.state_machine.lock().unwrap();
                 state_machine
                     .register_transition_state(transition.get_id(), TransitionState::Queued);
             } else {
-                let mut state_machine = self.state_machine.lock().unwrap();
                 state_machine
                     .register_transition_state(
                         transition.get_id(), TransitionState::Abandoned(TransitionAbandonedReason::NotLeader));
