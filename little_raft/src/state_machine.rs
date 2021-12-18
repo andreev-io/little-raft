@@ -6,7 +6,6 @@ use std::fmt::Debug;
 pub enum TransitionState {
     /// Queued transitions have been received from the user but have not been
     /// processed yet. They are in the queue.
-    ///
     Queued,
 
     /// Committed transitions have not yet been applied to the state machine but
@@ -22,10 +21,12 @@ pub enum TransitionState {
     Abandoned(TransitionAbandonedReason),
 }
 
+/// TransitionAbandonedReason explains why a particular transition has been
+/// abandoned by the replica.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransitionAbandonedReason {
-    // NotLeader transitions have been abandoned because the replica is not
-    // the cluster leader.
+    /// NotLeader transitions have been abandoned because the replica is not the
+    /// cluster leader.
     NotLeader,
 
     // ConflictWithLeader uncommitted transitions are abandoned because they
