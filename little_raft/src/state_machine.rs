@@ -23,7 +23,8 @@ pub enum TransitionState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransitionAbandonedReason {
-    // NotLeader transitions have been abandoned because the replica is not the cluster leadedr.
+    // NotLeader transitions have been abandoned because the replica is not
+    // the cluster leader.
     NotLeader,
 }
 
