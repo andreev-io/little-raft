@@ -26,6 +26,10 @@ pub enum TransitionAbandonedReason {
     // NotLeader transitions have been abandoned because the replica is not
     // the cluster leader.
     NotLeader,
+
+    // ConflictingEntry entry logs in followers that are inconsistent with the
+    // leader's.
+    ConflictingEntry,
 }
 
 /// StateMachineTransition describes a user-defined transition that can be
