@@ -534,9 +534,16 @@ where
             return;
         }
 
+        let mut state_machine = self.state_machine.lock().unwrap();
         for entry in entries {
             // Drop local inconsistent logs.
             if entry.index < self.log.len() && entry.term != self.log[entry.index].term {
+                for i in entry.index..self.log.len() {
+                    state_machine.register_transition_state(
+                        self.log[i].transition.get_id(),
+                        TransitionState::Abandoned(TransitionAbandonedReason::ConflictingEntry)
+                    );
+                } 
                 self.log.truncate(entry.index);
             }
 
