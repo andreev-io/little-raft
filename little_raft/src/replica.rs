@@ -549,11 +549,7 @@ where
         // Update local commit index to either the received commit index or the
         // latest local log position, whichever is smaller.
         if commit_index > self.commit_index && !self.log.is_empty() {
-            self.commit_index = if commit_index < self.log[self.log.len() - 1].index {
-                commit_index
-            } else {
-                self.log[self.log.len() - 1].index
-            }
+            self.commit_index = cmp::min(commit_index, self.log[self.log.len() - 1].index)
         }
         self.cluster.lock().unwrap().register_leader(Some(from_id));
         self.cluster.lock().unwrap().send_message(
