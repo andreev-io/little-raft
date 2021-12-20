@@ -27,9 +27,9 @@ pub enum TransitionAbandonedReason {
     // the cluster leader.
     NotLeader,
 
-    // ConflictingEntry entry logs in followers that are inconsistent with the
-    // leader's.
-    ConflictingEntry,
+    // ConflictWithLeader uncommitted transitions are abandoned because they
+    // don't match the consensus achieved by the majority of the cluster.
+    ConflictWithLeader,
 }
 
 /// StateMachineTransition describes a user-defined transition that can be

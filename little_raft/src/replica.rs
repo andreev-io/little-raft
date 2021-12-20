@@ -541,7 +541,7 @@ where
                 for i in entry.index..self.log.len() {
                     state_machine.register_transition_state(
                         self.log[i].transition.get_id(),
-                        TransitionState::Abandoned(TransitionAbandonedReason::ConflictingEntry)
+                        TransitionState::Abandoned(TransitionAbandonedReason::ConflictWithLeader)
                     );
                 } 
                 self.log.truncate(entry.index);
