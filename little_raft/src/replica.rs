@@ -6,7 +6,6 @@ use crate::{
     },
     timer::Timer,
 };
-use bytes::Bytes;
 use crossbeam_channel::{Receiver, Select};
 use rand::Rng;
 use std::cmp::Ordering;
@@ -38,11 +37,12 @@ enum ReplicaError {
 /// to maintain the consistency of the user-defined StateMachine across the
 /// cluster. It uses the user-defined Cluster implementation to talk to other
 /// Replicas, be it over the network or pigeon post.
-pub struct Replica<C, M, T>
+pub struct Replica<C, M, T, D>
 where
-    C: Cluster<T>,
-    M: StateMachine<T>,
+    C: Cluster<T, D>,
+    M: StateMachine<T, D>,
     T: StateMachineTransition,
+    D: Clone,
 {
     /// ID of this Replica.
     id: ReplicaID,
@@ -109,7 +109,7 @@ where
     /// The log snapshot of this Replica. Even if snapshot_delta is 0, the
     /// snapshot field can be Some(_), since the Replica can be started with a
     /// seed snapshot.
-    snapshot: Option<Snapshot>,
+    snapshot: Option<Snapshot<D>>,
 
     /// The length of the log sequence that is represented by the snapshot.
     /// Since compacted entries aren't in the log anymore, access to the log
@@ -121,11 +121,12 @@ where
     index_offset: usize,
 }
 
-impl<C, M, T> Replica<C, M, T>
+impl<C, M, T, D> Replica<C, M, T, D>
 where
-    C: Cluster<T>,
-    M: StateMachine<T>,
+    C: Cluster<T, D>,
+    M: StateMachine<T, D>,
     T: StateMachineTransition,
+    D: Clone,
 {
     /// Create a new Replica.
     ///
@@ -164,7 +165,7 @@ where
         noop_transition: T,
         heartbeat_timeout: Duration,
         election_timeout_range: (Duration, Duration),
-    ) -> Replica<C, M, T> {
+    ) -> Replica<C, M, T, D> {
         let snapshot = state_machine.lock().unwrap().get_snapshot();
         // index_offset is the "length" of the snapshot, so calculate it as
         // snapshot.last_included_index + 1.
@@ -343,7 +344,7 @@ where
         self.load_new_transitions();
     }
 
-    fn process_message(&mut self, message: Message<T>) {
+    fn process_message(&mut self, message: Message<T, D>) {
         match self.state {
             State::Leader => self.process_message_as_leader(message),
             State::Candidate => self.process_message_as_candidate(message),
@@ -386,7 +387,7 @@ where
 
     fn broadcast_message<F>(&self, message_generator: F)
     where
-        F: Fn(usize) -> Message<T>,
+        F: Fn(usize) -> Message<T, D>,
     {
         self.peer_ids.iter().for_each(|peer_id| {
             self.cluster
@@ -491,7 +492,7 @@ where
         }
     }
 
-    fn process_message_as_leader(&mut self, message: Message<T>) {
+    fn process_message_as_leader(&mut self, message: Message<T, D>) {
         match message {
             Message::AppendEntryResponse {
                 from_id,
@@ -617,7 +618,7 @@ where
         last_included_index: usize,
         last_included_term: usize,
         _offset: usize,
-        data: Bytes,
+        data: D,
         _done: bool,
     ) {
         if self.current_term > term {
@@ -744,7 +745,7 @@ where
         );
     }
 
-    fn process_message_as_follower(&mut self, message: Message<T>) {
+    fn process_message_as_follower(&mut self, message: Message<T, D>) {
         match message {
             Message::VoteRequest {
                 from_id,
@@ -790,7 +791,7 @@ where
         }
     }
 
-    fn process_message_as_candidate(&mut self, message: Message<T>) {
+    fn process_message_as_candidate(&mut self, message: Message<T, D>) {
         match message {
             Message::AppendEntryRequest { term, from_id, .. } => {
                 self.process_append_entry_request_as_candidate(term, from_id, message)
@@ -814,7 +815,7 @@ where
         &mut self,
         from_id: ReplicaID,
         term: usize,
-        message: Message<T>,
+        message: Message<T, D>,
     ) {
         // If the term is greater or equal to current term, then there's an
         // active Leader, so convert self to a follower. If the term is smaller
@@ -862,7 +863,7 @@ where
         &mut self,
         term: usize,
         from_id: ReplicaID,
-        message: Message<T>,
+        message: Message<T, D>,
     ) {
         if term > self.current_term {
             self.cluster.lock().unwrap().register_leader(None);
@@ -884,7 +885,7 @@ where
         &mut self,
         term: usize,
         from_id: ReplicaID,
-        message: Message<T>,
+        message: Message<T, D>,
     ) {
         if term >= self.current_term {
             self.cluster.lock().unwrap().register_leader(None);

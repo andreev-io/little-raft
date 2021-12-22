@@ -42,7 +42,7 @@ struct Calculator {
     pending_transitions: Vec<ArithmeticOperation>,
 }
 
-impl StateMachine<ArithmeticOperation> for Calculator {
+impl StateMachine<ArithmeticOperation, Bytes> for Calculator {
     fn apply_transition(&mut self, transition: ArithmeticOperation) {
         self.value += transition.delta;
         println!("id {} my value is now {} after applying delta {}", self.id, self.value, transition.delta);
@@ -68,12 +68,12 @@ impl StateMachine<ArithmeticOperation> for Calculator {
         cur
     }
 
-    fn get_snapshot(&mut self) -> Option<Snapshot> {
+    fn get_snapshot(&mut self) -> Option<Snapshot<Bytes>> {
         println!("id {} checked for snapshot", self.id);
         None
     }
 
-    fn create_snapshot(&mut self, index: usize, term: usize) -> Snapshot {
+    fn create_snapshot(&mut self, index: usize, term: usize) -> Snapshot<Bytes> {
         println!("id {} created snapshot", self.id);
         Snapshot {
             last_included_index: index,
@@ -82,7 +82,7 @@ impl StateMachine<ArithmeticOperation> for Calculator {
         }
     }
 
-    fn set_snapshot(&mut self, snapshot: Snapshot) {
+    fn set_snapshot(&mut self, snapshot: Snapshot<Bytes>) {
         let v: Vec<u8> = snapshot.data.into_iter().collect();
         self.value = i32::from_be_bytes(v[..].try_into().expect("incorrect length"));
         println!("id {} my value is now {} after loading", self.id, self.value);
@@ -93,12 +93,12 @@ impl StateMachine<ArithmeticOperation> for Calculator {
 struct ThreadCluster {
     id: usize,
     is_leader: bool,
-    transmitters: BTreeMap<usize, Sender<Message<ArithmeticOperation>>>,
-    pending_messages: Vec<Message<ArithmeticOperation>>,
+    transmitters: BTreeMap<usize, Sender<Message<ArithmeticOperation, Bytes>>>,
+    pending_messages: Vec<Message<ArithmeticOperation, Bytes>>,
     halt: bool,
 }
 
-impl Cluster<ArithmeticOperation> for ThreadCluster {
+impl Cluster<ArithmeticOperation, Bytes> for ThreadCluster {
     fn register_leader(&mut self, leader_id: Option<usize>) {
         if let Some(id) = leader_id {
             if id == self.id {
@@ -111,7 +111,7 @@ impl Cluster<ArithmeticOperation> for ThreadCluster {
         }
     }
 
-    fn send_message(&mut self, to_id: usize, message: Message<ArithmeticOperation>) {
+    fn send_message(&mut self, to_id: usize, message: Message<ArithmeticOperation, Bytes>) {
         // Drop messages with probability 0.25.
         let n: u8 = rand::thread_rng().gen();
         if n % 4 == 0 {
@@ -127,7 +127,7 @@ impl Cluster<ArithmeticOperation> for ThreadCluster {
         self.halt
     }
 
-    fn receive_messages(&mut self) -> Vec<Message<ArithmeticOperation>> {
+    fn receive_messages(&mut self) -> Vec<Message<ArithmeticOperation, Bytes>> {
         let mut cur = self.pending_messages.clone();
         // Shuffle messages.
         cur.shuffle(&mut thread_rng());
@@ -140,7 +140,7 @@ impl Cluster<ArithmeticOperation> for ThreadCluster {
 // communication between replicas (threads).
 fn create_clusters(
     n: usize,
-    transmitters: BTreeMap<usize, Sender<Message<ArithmeticOperation>>>,
+    transmitters: BTreeMap<usize, Sender<Message<ArithmeticOperation, Bytes>>>,
 ) -> Vec<Arc<Mutex<ThreadCluster>>> {
     let mut clusters = Vec::new();
     for i in 0..n {
@@ -162,12 +162,12 @@ fn create_clusters(
 fn create_communication_between_clusters(
     n: usize,
 ) -> (
-    BTreeMap<usize, Sender<Message<ArithmeticOperation>>>,
-    Vec<Receiver<Message<ArithmeticOperation>>>,
+    BTreeMap<usize, Sender<Message<ArithmeticOperation, Bytes>>>,
+    Vec<Receiver<Message<ArithmeticOperation, Bytes>>>,
 ) {
     let (mut transmitters, mut receivers) = (BTreeMap::new(), Vec::new());
     for i in 0..n {
-        let (tx, rx) = unbounded::<Message<ArithmeticOperation>>();
+        let (tx, rx) = unbounded::<Message<ArithmeticOperation, Bytes>>();
         transmitters.insert(i, tx);
         receivers.push(rx);
     }
@@ -238,7 +238,7 @@ fn create_notifiers(
 
 fn run_clusters_communication(
     mut clusters: Vec<Arc<Mutex<ThreadCluster>>>,
-    mut cluster_message_receivers: Vec<Receiver<Message<ArithmeticOperation>>>,
+    mut cluster_message_receivers: Vec<Receiver<Message<ArithmeticOperation, Bytes>>>,
     mut message_notifiers_tx: Vec<Sender<()>>,
 ) {
     for _ in (0..clusters.len()).rev() {

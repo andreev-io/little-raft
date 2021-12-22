@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use std::fmt::Debug;
 
 /// TransitionState describes the state of a particular transition.
@@ -50,18 +49,19 @@ pub trait StateMachineTransition: Clone + Debug {
 /// Replica start from a saved state or perform log compaction before the log
 /// sequence starts taking up too much memory.
 #[derive(Clone)]
-pub struct Snapshot {
+pub struct Snapshot<D> where D: Clone {
     pub last_included_index: usize,
     pub last_included_term: usize,
-    pub data: Bytes,
+    pub data: D,
 }
 
 /// StateMachine describes a user-defined state machine that is replicated
 /// across the cluster. Raft can replicate whatever distributed state machine
 /// can implement this trait.
-pub trait StateMachine<T>
+pub trait StateMachine<T, D>
 where
     T: StateMachineTransition,
+    D: Clone,
 {
     /// This is a hook that the local Replica will call each time the state of a
     /// particular transition changes. It is up to the user what to do with that
@@ -94,7 +94,7 @@ where
     /// snapshot.last_included_term are truthful. However, it is up to the user
     /// to put the StateMachine into the right state before returning from
     /// load_snapshot().
-    fn get_snapshot(&mut self) -> Option<Snapshot>;
+    fn get_snapshot(&mut self) -> Option<Snapshot<D>>;
 
     /// create_snapshot is periodically called by the Replica if log compaction
     /// is enabled by setting snapshot_delta > 0. The implementation MUST create
@@ -107,11 +107,11 @@ where
         &mut self,
         last_included_index: usize,
         last_included_term: usize,
-    ) -> Snapshot;
+    ) -> Snapshot<D>;
 
     /// When a Replica receives a snapshot from another Replica, set_snapshot is
     /// called. The StateMachine MUST then load its state from the provided
     /// snapshot and potentially save said snapshot to persistent storage, same
     /// way it is done in create_snapshot.
-    fn set_snapshot(&mut self, snapshot: Snapshot);
+    fn set_snapshot(&mut self, snapshot: Snapshot<D>);
 }

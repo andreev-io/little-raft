@@ -1,6 +1,5 @@
 use crate::replica::ReplicaID;
-use crate::state_machine::StateMachineTransition;
-use bytes::Bytes;
+use crate::state_machine::{StateMachineTransition};
 
 /// LogEntry is a state machine transition along with some metadata needed for
 /// Raft.
@@ -17,9 +16,10 @@ where
 /// Message describes messages that the replicas pass between each other to
 /// achieve consensus on the distributed state machine.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
-pub enum Message<T>
+pub enum Message<T, D>
 where
     T: StateMachineTransition,
+    D: Clone,
 {
     /// AppendEntryRequest is used by the Leader to send out logs for other
     /// replicas to append to their log. It also has information on what logs
@@ -66,7 +66,7 @@ where
         last_included_index: usize,
         last_included_term: usize,
         offset: usize,
-        data: Bytes,
+        data: D,
         done: bool,
     },
 
