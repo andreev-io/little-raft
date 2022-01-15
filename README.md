@@ -5,7 +5,7 @@ The lightest distributed consensus library. Run your own replicated state machin
 Simply import the crate. In your `Cargo.toml`, add
 ```
 [dependencies]
-little_raft = "0.1"
+little_raft = "0.2.0"
 ```
 
 ## Using
