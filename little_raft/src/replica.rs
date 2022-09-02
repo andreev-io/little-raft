@@ -705,25 +705,7 @@ where
             return;
         }
 
-        let mut state_machine = self.state_machine.lock().unwrap();
-        for entry in entries {
-            // Drop local inconsistent logs.
-            if entry.index <= self.get_last_log_index()
-            && entry.term != self.get_term_at_index(entry.index).unwrap() {
-                for i in entry.index..self.log.len() {
-                    state_machine.register_transition_state(
-                        self.log[i].transition.get_id(),
-                        TransitionState::Abandoned(TransitionAbandonedReason::ConflictWithLeader)
-                    );
-                } 
-                self.log.truncate(entry.index);
-            }
-
-            // Push received logs.
-            if entry.index == self.log.len() + self.index_offset {
-                self.log.push(entry);
-            }
-        }
+        self.process_entries(entries);
 
         // Update local commit index to either the received commit index or the
         // latest local log position, whichever is smaller.
@@ -743,6 +725,29 @@ where
                 mismatch_index: None,
             },
         );
+    }
+
+    fn process_entries(&mut self, entries: Vec<LogEntry<T>>) {
+        let mut state_machine = self.state_machine.lock().unwrap();
+        for entry in entries {
+            // Drop local inconsistent logs.
+            if entry.index <= self.get_last_log_index()
+                && entry.term != self.get_term_at_index(entry.index).unwrap()
+            {
+                for i in entry.index..self.log.len() {
+                    state_machine.register_transition_state(
+                        self.log[i].transition.get_id(),
+                        TransitionState::Abandoned(TransitionAbandonedReason::ConflictWithLeader),
+                    );
+                }
+                self.log.truncate(entry.index);
+            }
+
+            // Push received logs.
+            if entry.index == self.log.len() + self.index_offset {
+                self.log.push(entry);
+            }
+        }
     }
 
     fn process_message_as_follower(&mut self, message: Message<T, D>) {
